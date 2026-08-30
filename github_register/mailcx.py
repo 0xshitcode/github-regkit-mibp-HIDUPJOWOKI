@@ -15,7 +15,7 @@ import random
 import re
 import string
 import time
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 import requests
 
@@ -148,14 +148,21 @@ class MailCxClient:
         log: Optional[Callable[[str], None]] = None,
         cancel_cb: Optional[Callable[[], bool]] = None,
         email: str = "",  # ignored — present for API compat with LitensiClient
+        exclude_codes: Optional[Iterable[str]] = None,
     ) -> str:
         """Poll the mailbox until the GitHub verification code arrives.
 
         Mail.cx long-polls for 25s per request, then we retry.
         Total timeout is controlled by `timeout` parameter.
+
+        ``exclude_codes`` — codes already consumed (e.g. the signup launch
+        code). When GitHub asks for a SECOND launch code (device verification
+        on login), the first message still sits in the inbox; skipping those
+        codes lets us wait for the new one instead of returning the old one.
         """
         started = time.time()
         attempts = 0
+        skip = {str(c).strip() for c in (exclude_codes or ()) if str(c).strip()}
 
         while time.time() - started < timeout:
             if cancel_cb and cancel_cb():
@@ -179,8 +186,13 @@ class MailCxClient:
                     log(f"[*] mailcx message from={from_addr} subject={subject[:60]}")
 
                 code = self.extract_github_code(body)
-                if code:
-                    return code
+                if not code:
+                    continue
+                if code in skip:
+                    if log:
+                        log(f"[*] mailcx skipped already-used code {code}")
+                    continue
+                return code
 
             elapsed = int(time.time() - started)
             if log:

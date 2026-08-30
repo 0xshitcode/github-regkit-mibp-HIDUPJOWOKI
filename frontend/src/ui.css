@@ -632,3 +632,31 @@
 .group-pick svg { color: var(--text-muted); flex: none; }
 .group-pick-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-pick-count { margin-left: auto; flex: none; color: var(--text-muted); font-size: 11px; font-weight: 700; }
+/* multi-group membership toggle */
+.group-pick.member {
+  border-color: rgba(var(--accent-rgb), 0.45);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.group-pick.member:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.65);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.group-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--accent);
+}
+.group-pick.member .group-check {
+  border-color: rgba(var(--accent-rgb), 0.55);
+  background: rgba(var(--accent-rgb), 0.18);
+}
+.group-check svg { color: var(--accent); }

@@ -573,14 +573,16 @@ async def api_accounts_preview(
             raise HTTPException(status_code=404, detail="group not found")
         files = sorted(ACCOUNTS_DIR.glob("github_accounts_*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
         seen: set = set()
-        rows: List[Dict[str, str]] = []
+        rows: List[Dict[str, Any]] = []
         for f in files:
             for row in _parse_accounts_file(f):
                 key = row["email"].strip().lower()
-                if key in seen or gdata["assignments"].get(key) != group:
+                memberships = gdata["assignments"].get(key, [])
+                if key in seen or group not in memberships:
                     continue
                 seen.add(key)
-                row["group"] = group
+                row["groups"] = memberships
+                row["group"] = group  # convenience alias for the active view
                 rows.append(row)
         return {"ok": True, "rows": rows, "total": len(rows), "name": "", "group": group}
     if name:
@@ -595,7 +597,9 @@ async def api_accounts_preview(
         path = files[0]
     rows = _parse_accounts_file(path)
     for row in rows:
-        row["group"] = gdata["assignments"].get(row["email"].strip().lower(), "")
+        memberships = gdata["assignments"].get(row["email"].strip().lower(), [])
+        row["groups"] = memberships
+        row["group"] = memberships[0] if memberships else ""  # legacy alias
     return {"ok": True, "rows": rows, "total": len(rows), "name": path.name}
 
 
@@ -694,9 +698,28 @@ async def api_accounts_rename_file(
 
 
 # ---------- account groups ----------
-# groups.json: {"groups": ["Github", ...], "assignments": {email_lower: group}}
-# Membership is keyed by email so an account keeps its group even if its
-# accounts file is renamed; deleting the row removes the assignment.
+# groups.json: {"groups": ["Github", ...], "assignments": {email_lower: [group, ...]}}
+# An account may belong to multiple groups at once. Membership is keyed by
+# email so an account keeps its groups even if its accounts file is renamed;
+# deleting the row removes all of its assignments.
+# Legacy format (single group string per email) is migrated on load.
+
+def _norm_groups_value(value: Any) -> List[str]:
+    """Normalize one assignment entry into a list of group names.
+
+    Accepts a single string (legacy format), a list of strings, or anything
+    else (dropped). Order is preserved, duplicates removed.
+    """
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, list):
+        out: List[str] = []
+        for g in value:
+            if isinstance(g, str) and g and g not in out:
+                out.append(g)
+        return out
+    return []
+
 
 def _load_groups() -> Dict[str, Any]:
     try:
@@ -705,12 +728,15 @@ def _load_groups() -> Dict[str, Any]:
         return {"groups": [], "assignments": {}}
     groups = data.get("groups") if isinstance(data, dict) else None
     assignments = data.get("assignments") if isinstance(data, dict) else None
+    normalized: Dict[str, List[str]] = {}
+    if isinstance(assignments, dict):
+        for email, value in assignments.items():
+            memberships = _norm_groups_value(value)
+            if memberships:
+                normalized[str(email)] = memberships
     return {
         "groups": [str(g) for g in groups] if isinstance(groups, list) else [],
-        "assignments": (
-            {str(k): str(v) for k, v in assignments.items()}
-            if isinstance(assignments, dict) else {}
-        ),
+        "assignments": normalized,
     }
 
 
@@ -734,7 +760,9 @@ async def api_groups_list(x_access_key: Optional[str] = Header(None)) -> Dict[st
     _require_auth(x_access_key)
     with _groups_lock:
         data = _load_groups()
-    counts = collections.Counter(data["assignments"].values())
+    counts = collections.Counter()
+    for memberships in data["assignments"].values():
+        counts.update(memberships)
     items = [{"name": g, "count": counts.get(g, 0)} for g in data["groups"]]
     return {"ok": True, "groups": items}
 
@@ -770,39 +798,72 @@ async def api_groups_delete(
         if name not in data["groups"]:
             raise HTTPException(status_code=404, detail="group not found")
         data["groups"].remove(name)
-        removed = sum(1 for g in data["assignments"].values() if g == name)
-        data["assignments"] = {e: g for e, g in data["assignments"].items() if g != name}
+        removed = 0
+        cleaned: Dict[str, List[str]] = {}
+        for email, memberships in data["assignments"].items():
+            if name in memberships:
+                removed += 1
+            kept = [g for g in memberships if g != name]
+            if kept:
+                cleaned[email] = kept
+        data["assignments"] = cleaned
         _save_groups(data)
     return {"ok": True, "deleted": name, "unassigned": removed}
 
 
 class AssignBody(BaseModel):
     email: str
-    group: str = ""  # empty string = remove from any group
+    group: str  # group name to toggle membership for
 
 
 @app.post("/api/groups/assign")
 async def api_groups_assign(
     body: AssignBody, x_access_key: Optional[str] = Header(None)
 ) -> Dict[str, Any]:
-    """Assign one account (by email) to a group; empty group unassigns."""
+    """Toggle one account's membership in a group.
+
+    If the account is not a member it is added; if it is already a member it
+    is removed. An account may belong to any number of groups.
+    """
     _require_auth(x_access_key)
     email = body.email.strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="invalid email")
+    group = body.group.strip()
+    if not group or not _valid_group_name(group):
+        raise HTTPException(status_code=400, detail="invalid group name")
     with _groups_lock:
         data = _load_groups()
-        group = body.group.strip()
-        if group:
-            if not _valid_group_name(group):
-                raise HTTPException(status_code=400, detail="invalid group name")
-            if group not in data["groups"]:
-                raise HTTPException(status_code=404, detail=f"group not found: {group}")
-            data["assignments"][email] = group
+        if group not in data["groups"]:
+            raise HTTPException(status_code=404, detail=f"group not found: {group}")
+        memberships = list(data["assignments"].get(email, []))
+        if group in memberships:
+            memberships.remove(group)
+            action = "removed"
+        else:
+            memberships.append(group)
+            action = "added"
+        if memberships:
+            data["assignments"][email] = memberships
         else:
             data["assignments"].pop(email, None)
         _save_groups(data)
-    return {"ok": True, "email": email, "group": group}
+    return {"ok": True, "email": email, "group": group, "action": action, "groups": memberships}
+
+
+@app.get("/api/groups/membership")
+async def api_groups_membership(
+    email: str = Query(..., min_length=3, max_length=320),
+    x_access_key: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """List all groups one account (by email) currently belongs to."""
+    _require_auth(x_access_key)
+    key = email.strip().lower()
+    if not key or "@" not in key:
+        raise HTTPException(status_code=400, detail="invalid email")
+    with _groups_lock:
+        data = _load_groups()
+    return {"ok": True, "email": key, "groups": data["assignments"].get(key, [])}
 
 
 @app.delete("/api/accounts/file")

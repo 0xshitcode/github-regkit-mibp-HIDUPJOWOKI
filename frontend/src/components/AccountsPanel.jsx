@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Copy, Download, FileJson, FileText, FolderGit2, KeyRound, Pencil, ShieldCheck, Trash2, UserMinus, UserPlus } from 'lucide-react'
+import { Check, Copy, Download, FileJson, FileText, FolderGit2, KeyRound, Pencil, Plus, ShieldCheck, Trash2, UserMinus, UserPlus } from 'lucide-react'
 import { api, getToken } from '../api.js'
 import { Button, Card, Dialog, EmptyState, Input, Spinner } from './ui.jsx'
 
@@ -13,7 +13,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
   const [confirm, setConfirm] = useState(null) // {type:'row'|'file', ...}
   const [rename, setRename] = useState(null) // {name, value} | null
   const [renameBusy, setRenameBusy] = useState(false)
-  const [assign, setAssign] = useState(null) // {email, groups, newName} | null
+  const [assign, setAssign] = useState(null) // {email, groups, memberOf, newName} | null
   const [assignBusy, setAssignBusy] = useState(false)
   const [recovery, setRecovery] = useState(null) // {email, codes} | null
   const [recoveryLoading, setRecoveryLoading] = useState(false)
@@ -225,23 +225,28 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
   }
 
   async function openAssign(email) {
-    setAssign({ email, groups: null, newName: '' })
+    setAssign({ email, groups: null, memberOf: [], newName: '' })
     try {
-      const d = await api.get('/api/groups')
-      setAssign((a) => (a && a.email === email ? { ...a, groups: d.groups || [] } : a))
+      const [d, m] = await Promise.all([
+        api.get('/api/groups'),
+        api.get(`/api/groups/membership?email=${encodeURIComponent(email)}`).catch(() => null),
+      ])
+      const memberOf = m?.groups || []
+      setAssign((a) => (a && a.email === email ? { ...a, groups: d.groups || [], memberOf } : a))
     } catch (e) {
       setAssign(null)
       notify('✗ ' + e.message)
     }
   }
 
-  async function assignTo(groupName) {
+  async function toggleGroup(groupName) {
     if (!assign || assignBusy) return
     setAssignBusy(true)
     try {
-      await api.post('/api/groups/assign', { email: assign.email, group: groupName })
-      notify(`✓ ${assign.email} → ${groupName}`)
-      setAssign(null)
+      const d = await api.post('/api/groups/assign', { email: assign.email, group: groupName })
+      const memberOf = d.groups || []
+      setAssign((a) => (a && a.email === assign.email ? { ...a, memberOf } : a))
+      notify(d.action === 'removed' ? `✓ ${assign.email} dikeluarkan dari ${groupName}` : `✓ ${assign.email} masuk ${groupName}`)
       loadRows(currentName, true)
       onGroupsChanged?.()
     } catch (e) {
@@ -261,9 +266,12 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
       // sudah ada / invalid — biarkan endpoint assign yang konfirmasi
     }
     try {
-      await api.post('/api/groups/assign', { email: assign.email, group: name })
-      notify(`✓ ${assign.email} → ${name}`)
-      setAssign(null)
+      const d = await api.post('/api/groups/assign', { email: assign.email, group: name })
+      const memberOf = d.groups || []
+      // refresh daftar group agar group baru muncul dengan count terkini
+      const list = await api.get('/api/groups').catch(() => null)
+      setAssign((a) => (a && a.email === assign.email ? { ...a, groups: list?.groups || a.groups, memberOf } : a))
+      notify(`✓ ${assign.email} masuk ${name}`)
       loadRows(currentName, true)
       onGroupsChanged?.()
     } catch (e) {
@@ -275,8 +283,8 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
 
   async function removeFromGroup(email) {
     try {
-      await api.post('/api/groups/assign', { email, group: '' })
-      notify(`✓ ${email} dikeluarkan dari ${group}`)
+      const d = await api.post('/api/groups/assign', { email, group })
+      notify(d.action === 'removed' ? `✓ ${email} dikeluarkan dari ${group}` : `✗ ${email} tidak terdaftar di ${group}`)
       loadRows(currentName, true)
       onGroupsChanged?.()
     } catch (e) {
@@ -420,8 +428,16 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                       )}
                     </td>
                     {!group && (
-                      <td style={styles.td}>
-                        {r.group ? (
+                      <td style={{ ...styles.td, maxWidth: 220 }}>
+                        {r.groups?.length ? (
+                          <span style={{ display: 'inline-flex', gap: 5, flexWrap: 'wrap' }}>
+                            {r.groups.map((g) => (
+                              <button key={g} type="button" className="group-badge" onClick={() => openAssign(r.email)} title="Ubah group akun ini">
+                                <FolderGit2 size={11} /> {g}
+                              </button>
+                            ))}
+                          </span>
+                        ) : r.group ? (
                           <button type="button" className="group-badge" onClick={() => openAssign(r.email)} title="Ubah group akun ini">
                             <FolderGit2 size={11} /> {r.group}
                           </button>
@@ -442,7 +458,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                         ) : (
                           <Button size="sm"
                             onClick={() => openAssign(r.email)}
-                            title="Tambahkan akun ini ke group"
+                            title="Kelola group akun ini (bisa beberapa group)"
                           >
                             <UserPlus size={13} /> Group
                           </Button>
@@ -544,12 +560,15 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
       <Dialog
         open={!!assign}
         onClose={() => !assignBusy && setAssign(null)}
-        title="Tambah ke group"
+        title="Kelola group akun"
       >
         {assign && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ fontSize: 13, color: 'var(--muted)', overflowWrap: 'anywhere' }}>
               Akun <strong style={{ color: 'var(--text)' }}>{assign.email}</strong>
+            </div>
+            <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
+              Satu akun bisa masuk beberapa group. Klik untuk memasukkan / mengeluarkan.
             </div>
             {assign.groups === null ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' }}>
@@ -559,13 +578,16 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
               <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>Belum ada group — buat lewat kolom di bawah.</div>
             ) : (
               <div className="group-pick-list">
-                {assign.groups.map((g) => (
-                  <button key={g.name} type="button" className="group-pick" onClick={() => assignTo(g.name)} disabled={assignBusy}>
-                    <FolderGit2 size={14} />
-                    <span className="group-pick-name">{g.name}</span>
-                    <span className="group-pick-count">{g.count} akun</span>
-                  </button>
-                ))}
+                {assign.groups.map((g) => {
+                  const isMember = assign.memberOf.includes(g.name)
+                  return (
+                    <button key={g.name} type="button" className={isMember ? 'group-pick member' : 'group-pick'} onClick={() => toggleGroup(g.name)} disabled={assignBusy}>
+                      <span className="group-check" aria-hidden="true">{isMember && <Check size={13} />}</span>
+                      <span className="group-pick-name">{g.name}</span>
+                      <span className="group-pick-count">{g.count} akun</span>
+                    </button>
+                  )
+                })}
               </div>
             )}
             <div style={{ display: 'flex', gap: 8 }}>
@@ -578,7 +600,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                 style={{ flex: 1 }}
               />
               <Button variant="primary" onClick={createAndAssign} disabled={assignBusy || !assign.newName.trim()}>
-                <UserPlus size={14} /> Buat & Masukkan
+                <Plus size={14} /> Buat & Masukkan
               </Button>
             </div>
           </div>

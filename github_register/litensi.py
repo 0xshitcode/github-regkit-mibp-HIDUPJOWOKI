@@ -11,7 +11,7 @@ Endpoints (docs):
 from __future__ import annotations
 
 import time
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 import requests
 
@@ -158,12 +158,18 @@ class LitensiClient:
         reorder_after: int = 150,
         log: Optional[Callable[[str], None]] = None,
         cancel_cb: Optional[Callable[[], bool]] = None,
+        exclude_codes: Optional[Iterable[str]] = None,
     ) -> str:
         """Poll the mailbox until the GitHub code arrives.
 
         Litensi mailboxes expire fast (minutes). If no code arrives within
         `reorder_after` seconds, automatically re-order the SAME email for a
         fresh window and keep polling under the new order_id.
+
+        ``exclude_codes`` — codes already consumed (e.g. the signup launch
+        code). When GitHub asks for a SECOND launch code (device verification
+        on login), skipping those already-used codes lets us wait for the new
+        one instead of returning the same message again.
 
         IMPORTANT: returns only; setstatus SUCCESS is the CALLER's job once the
         code has actually been submitted to GitHub (see runner).
@@ -174,6 +180,13 @@ class LitensiClient:
         started = time.time()
         current_order = str(order_id)
         reordered_at: Optional[float] = None
+        # Once a reorder call has failed with a definitive error (e.g. the
+        # provider returns UNSUPPORT ACTIVATION, or the plan does not allow
+        # reorder for this zone), don't retry it every poll — otherwise the
+        # log fills with dozens of identical failures. We keep polling the
+        # original order until the total ``timeout`` expires.
+        reorder_disabled = False
+        skip = {str(c).strip() for c in (exclude_codes or ()) if str(c).strip()}
         while time.time() - started < timeout:
             if cancel_cb and cancel_cb():
                 raise LitensiError("cancelled while waiting for mail")
@@ -183,13 +196,19 @@ class LitensiClient:
                 msg = str(exc).lower()
                 if "activation does not exist" in msg or "email activation expired" in msg:
                     # mailbox window closed — re-order the same email if we can
-                    if email:
+                    if email and not reorder_disabled:
                         if log:
                             log(f"[*] litensi order {current_order} expired — reordering {email}")
-                        data = self.reorder(email)
-                        current_order = str(data.get("order_id") or current_order)
-                        reordered_at = time.time()
-                        continue
+                        try:
+                            data = self.reorder(email)
+                            current_order = str(data.get("order_id") or current_order)
+                            reordered_at = time.time()
+                            continue
+                        except Exception as reorder_exc:
+                            reorder_disabled = True
+                            if log:
+                                log(f"[!] litensi reorder failed permanently: {reorder_exc} — "
+                                    f"will keep polling the original order until timeout")
                 if log:
                     log(f"[!] litensi getstatus failed: {exc}")
                 time.sleep(poll_interval)
@@ -204,11 +223,15 @@ class LitensiClient:
             )
             code = extract_github_code(text)
             if code:
-                self._last_order_id = current_order
-                return code
+                if code in skip:
+                    if log:
+                        log(f"[*] litensi skipped already-used code {code}")
+                else:
+                    self._last_order_id = current_order
+                    return code
             # no code yet and the window is running out -> reorder the same email
             elapsed = time.time() - (reordered_at or started)
-            if email and elapsed >= reorder_after:
+            if email and not reorder_disabled and elapsed >= reorder_after:
                 if log:
                     log(f"[*] no code after {int(elapsed)}s — reordering mailbox {email}")
                 try:
@@ -216,8 +239,13 @@ class LitensiClient:
                     current_order = str(data.get("order_id") or current_order)
                     reordered_at = time.time()
                 except Exception as exc:
+                    # Reorder is not supported for this order / plan / zone.
+                    # Disable further reorder attempts so we don't spam the
+                    # provider every poll_interval seconds until timeout.
+                    reorder_disabled = True
                     if log:
-                        log(f"[!] reorder failed: {exc}")
+                        log(f"[!] reorder failed: {exc} — reorder disabled, "
+                            f"will keep polling original order")
             time.sleep(poll_interval)
         raise LitensiError(f"no GitHub code after {timeout}s")
 

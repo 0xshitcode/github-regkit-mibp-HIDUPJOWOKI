@@ -608,16 +608,48 @@ def _reject_blocked(page) -> None:
 
 
 def _cancel_order(mail, order_id: str, log) -> None:
-    """Cancel the Litensi order if we bail before code is consumed.
+    """Cancel the Litensi order after a failed registration.
 
-    For Mail.cx this is a no-op (no order system).
+    For Mail.cx this is a no-op (no order system). Litensi returns HTTP 404
+    with ``CANCEL AFTER 4 MINUTES`` when the order is already past the cancel
+    window — that is expected on longer flows and is logged at info level.
     """
     if isinstance(mail, LitensiClient) and order_id:
         try:
             mail.set_status(order_id, "CANCELED")
             log(f"[*] litensi order {order_id} canceled")
         except Exception as exc:
-            log(f"[i] litensi cancel failed (non-fatal): {exc}")
+            msg = str(exc)
+            if "CANCEL AFTER" in msg or "HTTP 404" in msg:
+                log(f"[i] litensi order {order_id} already past cancel window "
+                    f"(no action needed)")
+            else:
+                log(f"[i] litensi cancel failed (non-fatal): {exc}")
+
+
+def _confirm_order(mail, order_id: str, log) -> None:
+    """Mark the Litensi order as SUCCESS after the code has been consumed.
+
+    Documented in the Litensi API as ``setstatus SUCCESS``; called only when
+    the account was successfully registered end-to-end (per litensi docs the
+    order must be confirmed by the caller). Mail.cx has no order concept so
+    this is a no-op there.
+    """
+    if isinstance(mail, LitensiClient) and order_id:
+        # Prefer the last order id that actually delivered the code — after a
+        # ``reorder`` the original id is no longer the right one to confirm.
+        confirm_id = mail.last_order_id or order_id
+        try:
+            mail.mark_success(confirm_id)
+            log(f"[*] litensi order {confirm_id} confirmed (SUCCESS)")
+        except Exception as exc:
+            msg = str(exc)
+            if "HTTP 404" in msg:
+                # order already expired / auto-confirmed on the provider side
+                log(f"[i] litensi order {confirm_id} setstatus skipped "
+                    f"(already past confirm window)")
+            else:
+                log(f"[i] litensi confirm failed (non-fatal): {exc}")
 
 
 def _is_hard_block(page) -> bool:
@@ -1263,11 +1295,32 @@ _LOGIN_INPUTS = ["#login_field", "input[name='login']", "input#login"]
 _LOGIN_PASS_INPUTS = ["#password", "input[name='password']", "input[type='password']"]
 
 
-def _try_login(page, username: str, password: str, context, log) -> bool:
+def _try_login(
+    page,
+    username: str,
+    password: str,
+    context,
+    log,
+    mail=None,
+    order_id: str = "",
+    email: str = "",
+    otp_timeout: int = 240,
+    used_codes: Optional[set] = None,
+    stop=None,
+) -> bool:
     """GitHub sends fresh signups to /login: sign in to obtain logged_in=yes.
+
+    Because ``fresh_profile`` mode gives every account a brand-new browser
+    profile, GitHub often treats the resulting login as coming from an
+    unrecognized device and challenges it with ANOTHER launch-code email
+    (device verification). When that page shows up after the credentials are
+    submitted, poll the same mailbox for a NEW code — codes already used
+    (e.g. the one from signup) are excluded — and fill it in before waiting
+    for the ``logged_in`` session cookie.
 
     Returns True when the login cookie is present afterwards.
     """
+    used = set(used_codes or ())
     try:
         user = page.locator(", ".join(_LOGIN_INPUTS)).first
         if not user.is_visible():
@@ -1293,12 +1346,78 @@ def _try_login(page, username: str, password: str, context, log) -> bool:
         log("[*] login form submitted after signup")
     except Exception as exc:
         log(f"[i] auto-login skipped: {exc}")
-    deadline = time.time() + 30
-    while time.time() < deadline:
+
+    verifications = 0
+    while True:
+        _raise_if_cancelled(stop)
+        try:
+            _raise_if_rate_limited(page)
+        except Exception:
+            raise  # GitHubRateLimited propagates for proxy rotation
         if _logged_in(context):
             return True
-        time.sleep(1.5)
-    return False
+        on_verify = False
+        try:
+            on_verify = _verify_input_visible(page) or _verify_page_markers(page)
+        except Exception:
+            on_verify = False
+        if on_verify:
+            if mail is None:
+                log("[!] device verification page shown but no mail client available")
+                return False
+            if verifications >= 2:
+                log("[!] device verification requested more than twice — giving up")
+                return False
+            verifications += 1
+            log(f"[*] device verification after login (url={page.url}) — waiting for a new code")
+            try:
+                code = mail.wait_for_code(
+                    order_id,
+                    timeout=otp_timeout,
+                    log=log,
+                    cancel_cb=stop,
+                    email=email,
+                    exclude_codes=used,
+                )
+            except RegistrationCancelled:
+                raise
+            except Exception as exc:
+                if stop and stop():
+                    raise RegistrationCancelled("cancelled during device verification wait")
+                log(f"[!] second launch code never arrived: {exc}")
+                return False
+            log(f"[*] login verification code: {code}")
+            used.add(code)
+            _fill_launch_code(page, code, log)
+            try:
+                state = _wait_post_submit(page, context, timeout=90, log=log, stop=stop)
+            except (RegistrationCancelled, GitHubRateLimited):
+                raise
+            except Exception as exc:
+                log(f"[!] post-verification wait failed: {exc}")
+                return False
+            if state == "verify":
+                log("[!] login verification code rejected (still on verify page)")
+                return False
+            continue
+        # no verify page — wait up to 30s for the cookie, breaking early if
+        # a verification page appears mid-wait
+        deadline = time.time() + 30
+        appeared = False
+        while time.time() < deadline:
+            _raise_if_cancelled(stop)
+            if _logged_in(context):
+                return True
+            try:
+                if _verify_input_visible(page) or _verify_page_markers(page):
+                    appeared = True
+                    break
+            except Exception:
+                pass
+            time.sleep(1.5)
+        if not appeared:
+            log(f"[!] auto-login not confirmed within 30s — url={page.url}")
+            return False
 
 
 def _create_repository(page, username: str, base_name: str, log) -> str:
@@ -1803,6 +1922,7 @@ def _post_form_flow(
     # after submit GitHub either shows the email verification (launch code)
     # page, or (high-trust sessions) logs straight in.
     state = _wait_post_submit(page, context, timeout=120, log=log, stop=stop)
+    used_codes: set[str] = set()
     if state == "verify":
         log(f"[*] verification page: {page.url}")
         code = mail.wait_for_code(
@@ -1811,8 +1931,10 @@ def _post_form_flow(
             log=log,
             cancel_cb=stop,
             email=email,
+            exclude_codes=used_codes,
         )
         log(f"[*] verification code: {code}")
+        used_codes.add(code)
         _fill_launch_code(page, code, log)
         # mail.cx has no order confirmation — code already extracted
         log(f"[*] verification code extracted and submitted")
@@ -1820,15 +1942,17 @@ def _post_form_flow(
         state2 = _wait_post_submit(page, context, timeout=90, log=log, stop=stop)
         if state2 == "verify":
             raise SignupError("verification code rejected (still on verify page)")
-    # state 'done' required — no more accepting bare redirects
-    totp_secret = ""
-    recovery = ""
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        _raise_if_cancelled(stop)
-        _raise_if_rate_limited(page)
-        if _logged_in(context):
-            log("[*] logged_in cookie confirmed — account is active")
+
+    def _finalize(post_login: bool) -> tuple[str, str, str]:
+        """Run the optional post-login stages (repo, 2FA, profile).
+
+        ``post_login`` is False when the browser never confirmed the
+        logged_in cookie — in that case we still keep the (already verified)
+        account credentials but skip stages that require an active session.
+        """
+        totp_secret = ""
+        recovery = ""
+        if post_login:
             # ---- stage 4: create first repository ----
             if cfg.create_repo:
                 try:
@@ -1846,42 +1970,49 @@ def _post_form_flow(
                 _complete_profile(page, username, cfg, log)
             except Exception as exc:
                 log(f"[i] profile stage skipped (account still saved): {exc}")
+        try:
             _save_trust_cookie(context, log)  # persist DataDome trust for the next fresh run
-            return username, totp_secret, recovery
+        except Exception as exc:
+            log(f"[i] trust-cookie save skipped: {exc}")
+        return username, totp_secret, recovery
+
+    # state 'done' required — no more accepting bare redirects
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        _raise_if_cancelled(stop)
+        _raise_if_rate_limited(page)
+        if _logged_in(context):
+            log("[*] logged_in cookie confirmed — account is active")
+            return _finalize(post_login=True)
         # GitHub sends fresh signups to /login: sign in with the new creds
         if "/login" in (page.url or ""):
-            if _try_login(page, email, password, context, log):
+            if _try_login(
+                page, email, password, context, log,
+                mail=mail, order_id=order_id, email=email,
+                otp_timeout=cfg.otp_timeout_sec,
+                used_codes=used_codes, stop=stop,
+            ):
                 log("[*] logged_in cookie confirmed after auto-login")
-                # ---- stage 4: create first repository ----
-                if cfg.create_repo:
-                    try:
-                        _create_repository(page, username, cfg.repo_name, log)
-                    except Exception as exc:
-                        log(f"[i] create repo stage skipped: {exc}")
-                # ---- stage 5: enable TOTP 2FA ----
-                if cfg.enable_2fa:
-                    try:
-                        totp_secret, recovery = _enable_2fa(page, log)
-                    except Exception as exc:
-                        log(f"[i] 2FA stage failed (account still saved): {exc}")
-                _save_recovery_per_account(email, recovery, log)
-                try:
-                    _complete_profile(page, username, cfg, log)
-                except Exception as exc:
-                    log(f"[i] profile stage skipped (account still saved): {exc}")
-                _save_trust_cookie(context, log)  # persist DataDome trust for the next fresh run
-                return username, totp_secret, recovery
-            raise SignupError("auto-login after signup failed")
+                return _finalize(post_login=True)
+            # The account exists on GitHub and its email is verified —
+            # matching the README's post-signup-failure policy, keep the
+            # credentials instead of discarding them. Stages 4/5 need an
+            # active session so they are skipped.
+            log("[!] auto-login not completed — saving the verified account "
+                "without repo/2FA/profile stages")
+            return _finalize(post_login=False)
         if _post_submit_state(page, context) == "pending":
             _sleep_with_cancel(2, stop)
             continue
         if _wait_post_submit(page, context, timeout=20, log=log, stop=stop) == "done":
             continue  # loop will hit the _logged_in check above
         _sleep_with_cancel(2, stop)
-    raise SignupError(
-        f"account not confirmed logged-in after flow; url={page.url} "
-        f"body={_page_text(page)[:200]!r}"
-    )
+    # deadline exhausted: the account is created and email-verified, but the
+    # session cookie never appeared and no /login redirect brought us there.
+    # Preserve the account rather than discarding it.
+    log(f"[!] session cookie not confirmed within 60s — saving the verified "
+        f"account (url={page.url})")
+    return _finalize(post_login=False)
 
 
 def _run_signup(
@@ -2036,6 +2167,7 @@ def register_one(
     email, order_id = mail.create_mailbox()
     log(f"[*] mailbox: {email} ({provider})")
 
+    succeeded = False
     try:
         password = generate_password()
         has_proxy = bool((cfg.proxy or "").strip() or (getattr(cfg, "proxy_file", "") or "").strip())
@@ -2067,6 +2199,7 @@ def register_one(
         # Recovery codes are stored in accounts/recovery/<email-hash>.txt.
         # This fifth marker lets the account UI show the recovery-code action
         # without exposing the codes in the main account list.
+        succeeded = True
         return f"{email}----{password}----{username}----{totp_secret}----{int(bool(recovery))}"
     except KeyboardInterrupt:
         raise
@@ -2079,8 +2212,15 @@ def register_one(
         return None
     finally:
         if provider == "litensi":
-            # confirm or cancel the Litensi order depending on outcome
-            _cancel_order(mail, order_id, log)
+            # Confirm or cancel the Litensi order based on the actual outcome.
+            # Before: this branch always canceled — that discarded successful
+            # orders (docs say the caller MUST setstatus SUCCESS once the
+            # code has been consumed) and produced misleading logs on both
+            # sides.
+            if succeeded:
+                _confirm_order(mail, order_id, log)
+            else:
+                _cancel_order(mail, order_id, log)
         else:
             log("[*] mailbox cleanup: no action needed (mail.cx)")
 
