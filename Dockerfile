@@ -6,7 +6,7 @@ RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
-# ---------- stage 2: runtime (debian slim: butuh glibc untuk Firefox/Camoufox) ----------
+# ---------- stage 2: runtime (debian slim: glibc needed for Firefox/Camoufox) ----------
 FROM python:3.12-slim-bookworm AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -40,5 +40,5 @@ EXPOSE 8093
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=20s \
     CMD curl -fsS http://127.0.0.1:8093/health || exit 1
 
-# config.json dimount dari host (lihat compose); fallback contoh bila lupa.
+# config.json is mounted from the host (see compose); fall back to the example if forgotten.
 CMD ["sh", "-c", "test -f config.json || cp config.example.json config.json; exec python -m web.server"]

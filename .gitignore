@@ -23,13 +23,13 @@ frontend/dist/
 frontend/.vite/
 npm-debug.log*
 
-# === Konfigurasi (RAHASIA — jangan di-commit) ===
+# === Config (SECRETS — never commit) ===
 config.json
 .env
 .env.*
 !.env.example
 
-# === Hasil akun (SENSITIF — jangan di-commit) ===
+# === Account output (SENSITIVE — never commit) ===
 github_accounts_*.txt
 github_recovery_codes.txt
 github-recovery-codes*.txt
@@ -39,7 +39,7 @@ mail_credentials.txt
 .browser-profile/
 .datadome-trust.json
 
-# === Playwright / rekaman step (bisa berisi nilai pribadi) ===
+# === Playwright / step recordings (may contain personal values) ===
 .playwright-mcp
 playwright-report/
 test-results/

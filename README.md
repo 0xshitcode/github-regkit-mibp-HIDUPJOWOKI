@@ -158,7 +158,7 @@ Open <http://127.0.0.1:8093>.
 - **Accounts**: export accounts, copy values, generate TOTP codes, and view
   recovery codes.
 
-Protect the web console with username + password (ala n8n/WAHA) for
+Protect the web console with username + password (like n8n/WAHA) for
 self-hosting/production. Copy `.env.example` to `.env` and fill it in
 (`.env` is git-ignored; server auto-loads it, no extra dependency):
 
@@ -185,42 +185,41 @@ The server binds to `127.0.0.1` by default — only bind `0.0.0.0` behind a trus
 
 ### Docker
 
-Image multi-stage: `node:20-alpine` (build frontend) + `python:3.12-slim`
-(runtime, sudah termasuk Firefox Camoufox + `xvfb` untuk mode headful):
+Multi-stage image: `node:20-alpine` (frontend build) + `python:3.12-slim`
+(runtime, includes Camoufox Firefox + `xvfb` for headful mode):
 
 ```bash
-cp .env.example .env          # isi GITHUB_REGISTER_PASSWORD yang kuat
+cp .env.example .env          # set a strong GITHUB_REGISTER_PASSWORD
 cp config.example.json config.json
 touch proxies.txt .datadome-trust.json github_recovery_codes.txt
 docker compose up -d --build
 ```
 
-Buka <http://localhost:8093>. Compose menimpa `GITHUB_REGISTER_HOST=0.0.0.0`
-di dalam container. Semua file di bawah persisten di host via bind-mount
-(jangan hapus): `config.json`, `accounts/` (`github_accounts_*.txt`,
+Open <http://localhost:8093>. Compose overrides `GITHUB_REGISTER_HOST=0.0.0.0`
+inside the container. All files below persist on the host via bind-mount
+(do not delete): `config.json`, `accounts/` (`github_accounts_*.txt`,
 `recovery/`, `groups.json`), `.browser-profile/`, `proxies.txt`,
-`.datadome-trust.json` (trust cookie — hilang = DataDome 403 dari nol lagi),
-`github_recovery_codes.txt`. Yang tidak persisten dan wajar hilang saat
-restart: session login web (di memori — login ulang). Untuk VPS tanpa display, set
-`"headless": true` di `config.json` (lebih hemat, sedikit lebih mudah
-diflag DataDome).
+`.datadome-trust.json` (trust cookie — losing it means DataDome 403s from scratch),
+`github_recovery_codes.txt`. Not persistent, which is fine: web login sessions
+(in memory — log in again). For display-less VPS, set `"headless": true` in
+`config.json` (cheaper, slightly easier for DataDome to flag).
 
-### VPS + nginx reverse proxy (satu network docker)
+### VPS + nginx reverse proxy (one docker network)
 
-Compose sudah gabung ke network eksternal `nginx-network` dan **tidak**
-publish port — akses publik hanya lewat nginx. Pastikan network ada:
+Compose already joins the external `nginx-network` and does **not** publish
+ports — public access only via nginx. Make sure the network exists:
 
 ```bash
 docker network ls | grep nginx-network || docker network create nginx-network
 docker compose up -d --build
 ```
 
-Contoh server block di nginx (satu network yang sama, TLS via certbot):
+Example server block in nginx (same network, TLS via certbot):
 
 ```nginx
 server {
     listen 443 ssl;
-    server_name regkit.contoh.com;
+    server_name regkit.example.com;
 
     location / {
         proxy_pass http://app:8093;
@@ -229,16 +228,16 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # SSE live-log: jangan buffer + jangan putus cepat
+        # SSE live-log: no buffering + no quick timeouts
         proxy_buffering off;
         proxy_read_timeout 86400s;
     }
 }
 ```
 
-`GITHUB_REGISTER_TRUST_PROXY=1` (sudah di compose) membuat rate-limit membaca
-IP asli dari `X-Forwarded-For`. Jangan aktifkan bila container di-expose
-langsung tanpa proxy.
+`GITHUB_REGISTER_TRUST_PROXY=1` (already in compose) makes rate-limit read the
+real IP from `X-Forwarded-For`. Do not enable it when the container is exposed
+directly without a proxy.
 
 ### CLI
 

@@ -97,7 +97,7 @@ export default function App() {
       setTab("accounts");
       loadGroups();
     } catch (e) {
-      alert(`Gagal membuat group: ${e.message}`);
+      alert(`Failed to create group: ${e.message}`);
     } finally {
       setGroupBusy(false);
     }
@@ -112,7 +112,7 @@ export default function App() {
       if (group === name) setGroup("");
       loadGroups();
     } catch (e) {
-      alert(`Gagal menghapus group: ${e.message}`);
+      alert(`Failed to delete group: ${e.message}`);
     } finally {
       setGroupBusy(false);
       setGroupDelete(null);
@@ -241,8 +241,8 @@ export default function App() {
                   setNewGroupName("");
                   setGroupCreateOpen(true);
                 }}
-                title="Group baru"
-                aria-label="Group baru"
+                title="New group"
+                aria-label="New group"
               >
                 <Plus size={14} />
               </button>
@@ -257,7 +257,7 @@ export default function App() {
                       : "app-nav-item"
                   }
                   onClick={() => selectGroup(g.name)}
-                  title={`${g.name} · ${g.count} akun`}
+                  title={`${g.name} · ${g.count} accounts`}
                 >
                   <FolderGit2 size={16} />
                   <span className="app-group-name">{g.name}</span>
@@ -267,15 +267,15 @@ export default function App() {
                   type="button"
                   className="app-group-del"
                   onClick={() => setGroupDelete(g.name)}
-                  title={`Hapus group ${g.name}`}
-                  aria-label={`Hapus group ${g.name}`}
+                  title={`Delete group ${g.name}`}
+                  aria-label={`Delete group ${g.name}`}
                 >
                   <X size={12} />
                 </button>
               </div>
             ))}
             {groups.length === 0 && (
-              <div className="app-nav-empty">Belum ada group</div>
+              <div className="app-nav-empty">No groups yet</div>
             )}
           </div>
         </nav>
@@ -292,7 +292,7 @@ export default function App() {
                 try {
                   await api.post("/api/logout", {});
                 } catch {
-                  /* token kadaluarsa = sudah logout, lanjut bersihkan lokal */
+                  /* expired token = already logged out, just clear local state */
                 }
                 setToken("");
                 window.location.reload();
@@ -338,7 +338,7 @@ export default function App() {
       <Dialog
         open={groupCreateOpen}
         onClose={() => !groupBusy && setGroupCreateOpen(false)}
-        title="Group baru"
+        title="New group"
         footer={
           <>
             <Button
@@ -363,11 +363,11 @@ export default function App() {
             value={newGroupName}
             onChange={(e) => setNewGroupName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && doCreateGroup()}
-            placeholder="Nama group, mis. Github"
+            placeholder="Group name, e.g. Github"
             disabled={groupBusy}
           />
           <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-            Hanya huruf, angka, <code>-</code>, <code>_</code>, dan{" "}
+            Only letters, digits, <code>-</code>, <code>_</code>, and{" "}
             <code>.</code> (maks 60 karakter).
           </div>
         </div>
@@ -376,7 +376,7 @@ export default function App() {
       <Dialog
         open={!!groupDelete}
         onClose={() => setGroupDelete(null)}
-        title="Hapus group ini?"
+        title="Delete this group?"
         footer={
           <>
             <Button onClick={() => setGroupDelete(null)}>Cancel</Button>
@@ -390,8 +390,8 @@ export default function App() {
           </>
         }
       >
-        Group <strong>{groupDelete}</strong> akan dihapus. Akun di dalamnya
-        tidak ikut terhapus, hanya dikeluarkan dari group.
+        Group <strong>{groupDelete}</strong> will be deleted. Accounts inside
+        are kept, only removed from the group.
       </Dialog>
     </div>
   );

@@ -211,9 +211,9 @@ def _socks_exit_ip(url: str, timeout: int = 12) -> str:
                 last_exc = exc
         if attempt == 0:
             time.sleep(3)  # give the sticky session a moment to warm up
-    raise SignupError(f"exit-IP lookup via proxy gagal: {last_exc} "
-                        f"(cek scheme http/https/socks5, user:pass, dan port di proxies.txt — "
-                        f"'405/407' = proxy menolak CONNECT/auth)")
+    raise SignupError(f"proxy exit-IP lookup failed: {last_exc} "
+                        f"(check scheme http/https/socks5, user:pass, and port in proxies.txt — "
+                        f"'405/407' = proxy refuses CONNECT/auth)")
 
 
 # ---------------------------------------------------------------------------
@@ -1133,7 +1133,7 @@ def _browser_ctx_options(cfg: Config, log=None) -> dict:
     if getattr(cfg, "fresh_profile", False):
         # fresh browser per account — no user_data_dir at all
         if log:
-            log("[*] fresh profile mode: browser baru tanpa cache (trust DataDome di-clone)")
+            log("[*] fresh profile mode: new browser without cache (DataDome trust cloned)")
     elif cfg.browser_profile_dir:
         opts["persistent_context"] = True
         opts["user_data_dir"] = str((ROOT / cfg.browser_profile_dir).resolve())

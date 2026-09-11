@@ -147,12 +147,12 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     try {
       const d = await api.get(`/api/totp?secret=${encodeURIComponent(secret)}`)
       const code = String(d.code || '')
-      if (!code) throw new Error('kode kosong')
+      if (!code) throw new Error('empty code')
       try {
         await navigator.clipboard.writeText(code)
         notify(`🔑 ${code} copied (expires in ${d.expires_in}s)`)
       } catch {
-        // clipboard denied — masih tampilkan kodenya sebagai fallback
+        // clipboard denied — still show the code as fallback
         notify(`🔑 ${email}: ${code} (expires in ${d.expires_in}s)`)
       }
     } catch (e) {
@@ -246,7 +246,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
       const d = await api.post('/api/groups/assign', { email: assign.email, group: groupName })
       const memberOf = d.groups || []
       setAssign((a) => (a && a.email === assign.email ? { ...a, memberOf } : a))
-      notify(d.action === 'removed' ? `✓ ${assign.email} dikeluarkan dari ${groupName}` : `✓ ${assign.email} masuk ${groupName}`)
+      notify(d.action === 'removed' ? `✓ ${assign.email} removed from ${groupName}` : `✓ ${assign.email} added to ${groupName}`)
       loadRows(currentName, true)
       onGroupsChanged?.()
     } catch (e) {
@@ -263,15 +263,15 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     try {
       await api.post('/api/groups', { name })
     } catch {
-      // sudah ada / invalid — biarkan endpoint assign yang konfirmasi
+      // exists / invalid — let the assign endpoint confirm
     }
     try {
       const d = await api.post('/api/groups/assign', { email: assign.email, group: name })
       const memberOf = d.groups || []
-      // refresh daftar group agar group baru muncul dengan count terkini
+      // refresh group list so the new group shows with a current count
       const list = await api.get('/api/groups').catch(() => null)
       setAssign((a) => (a && a.email === assign.email ? { ...a, groups: list?.groups || a.groups, memberOf } : a))
-      notify(`✓ ${assign.email} masuk ${name}`)
+      notify(`✓ ${assign.email} added to ${name}`)
       loadRows(currentName, true)
       onGroupsChanged?.()
     } catch (e) {
@@ -284,7 +284,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
   async function removeFromGroup(email) {
     try {
       const d = await api.post('/api/groups/assign', { email, group })
-      notify(d.action === 'removed' ? `✓ ${email} dikeluarkan dari ${group}` : `✗ ${email} tidak terdaftar di ${group}`)
+      notify(d.action === 'removed' ? `✓ ${email} removed from ${group}` : `✗ ${email} is not a member of ${group}`)
       loadRows(currentName, true)
       onGroupsChanged?.()
     } catch (e) {
@@ -314,17 +314,17 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
               {loadingRows && rows.length === 0
                 ? 'Loading accounts…'
                 : group
-                  ? <>{rows.length} accounts · dari semua file</>
+                  ? <>{rows.length} accounts · across all files</>
                   : <>{rows.length} accounts {currentName && `· ${currentName}`}</>}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {group && (
-              <Button onClick={onClearGroup} title="Kembali ke semua akun">
-                ← Semua Akun
+              <Button onClick={onClearGroup} title="Back to all accounts">
+                ← All Accounts
               </Button>
             )}
-            <Button onClick={copyAll} disabled={!rows.length}><Copy size={15} /> Copy Semua</Button>
+            <Button onClick={copyAll} disabled={!rows.length}><Copy size={15} /> Copy All</Button>
             <Button onClick={exportTxt} disabled={!rows.length}><FileText size={15} /> TXT</Button>
             <Button onClick={exportCsv} disabled={!rows.length}>CSV</Button>
             <Button onClick={exportJson} disabled={!rows.length}><FileJson size={15} /> JSON</Button>
@@ -378,7 +378,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
         {rows.length === 0 && (loadingFiles || loadingRows) ? (
           <TableSkeleton />
         ) : rows.length === 0 ? (
-          <EmptyState icon={group ? FolderGit2 : FileText} title={group ? 'Group ini masih kosong' : files.length === 0 ? 'No account files yet' : 'This file is empty'} description={group ? 'Tambahkan akun lewat tombol “+ Group” di halaman Registered Accounts.' : files.length === 0 ? 'Run a job from the Status page to create account output.' : undefined} />
+          <EmptyState icon={group ? FolderGit2 : FileText} title={group ? 'This group is empty' : files.length === 0 ? 'No account files yet' : 'This file is empty'} description={group ? 'Add accounts via the "+ Group" button on the Registered Accounts page.' : files.length === 0 ? 'Run a job from the Status page to create account output.' : undefined} />
         ) : (
           <div style={{ overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
             <table style={styles.table}>
@@ -390,7 +390,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                   <th style={styles.th}>Username</th>
                   <th style={styles.th}>TOTP Secret</th>
                   {!group && <th style={styles.th}>Group</th>}
-                  <th style={{ ...styles.th, width: 190 }}>Aksi</th>
+                  <th style={{ ...styles.th, width: 190 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -432,13 +432,13 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                         {r.groups?.length ? (
                           <span style={{ display: 'inline-flex', gap: 5, flexWrap: 'wrap' }}>
                             {r.groups.map((g) => (
-                              <button key={g} type="button" className="group-badge" onClick={() => openAssign(r.email)} title="Ubah group akun ini">
+                              <button key={g} type="button" className="group-badge" onClick={() => openAssign(r.email)} title="Change this account's groups">
                                 <FolderGit2 size={11} /> {g}
                               </button>
                             ))}
                           </span>
                         ) : r.group ? (
-                          <button type="button" className="group-badge" onClick={() => openAssign(r.email)} title="Ubah group akun ini">
+                            <button type="button" className="group-badge" onClick={() => openAssign(r.email)} title="Change this account's groups">
                             <FolderGit2 size={11} /> {r.group}
                           </button>
                         ) : (
@@ -451,14 +451,14 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                         {group ? (
                           <Button size="sm"
                             onClick={() => removeFromGroup(r.email)}
-                            title="Keluarkan akun dari group ini"
+                            title="Remove account from this group"
                           >
                             <UserMinus size={13} /> Remove
                           </Button>
                         ) : (
                           <Button size="sm"
                             onClick={() => openAssign(r.email)}
-                            title="Kelola group akun ini (bisa beberapa group)"
+                            title="Manage this account's groups (multiple allowed)"
                           >
                             <UserPlus size={13} /> Group
                           </Button>
@@ -471,16 +471,16 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                               () => notify('✗ Clipboard failed'),
                             )
                           }}
-                          title="Salin seluruh baris (email----password----username----totp)"
+                          title="Copy entire row (email----password----username----totp)"
                         >
                           <Copy size={13} /> Copy
                         </Button>
                         {r.totp && (
                           <Button size="sm"
                             onClick={() => showTotpCode(r.totp, r.email)}
-                            title="Generate kode 2FA saat ini dan salin ke clipboard"
+                            title="Generate the current 2FA code and copy to clipboard"
                           >
-                            <KeyRound size={13} /> Kode
+                            <KeyRound size={13} /> Code
                           </Button>
                         )}
                         {r.has_recovery && (
@@ -544,14 +544,14 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                 value={rename.value}
                 onChange={(e) => setRename({ ...rename, value: e.target.value })}
                 onKeyDown={(e) => e.key === 'Enter' && !renameBusy && rename.value.trim() && doRenameFile()}
-                placeholder="nama-baru"
+                placeholder="new-name"
                 disabled={renameBusy}
                 style={{ flex: 1 }}
               />
               <span style={{ fontFamily: "'SF Mono', Menlo, monospace", fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>.txt</span>
             </div>
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-              Hanya huruf, angka, <code>-</code>, <code>_</code>, dan <code>.</code> yang diperbolehkan.
+              Only letters, digits, <code>-</code>, <code>_</code>, and <code>.</code> are allowed.
             </div>
           </div>
         )}
@@ -560,22 +560,22 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
       <Dialog
         open={!!assign}
         onClose={() => !assignBusy && setAssign(null)}
-        title="Kelola group akun"
+        title="Manage account groups"
       >
         {assign && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ fontSize: 13, color: 'var(--muted)', overflowWrap: 'anywhere' }}>
-              Akun <strong style={{ color: 'var(--text)' }}>{assign.email}</strong>
+              Account <strong style={{ color: 'var(--text)' }}>{assign.email}</strong>
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
-              Satu akun bisa masuk beberapa group. Klik untuk memasukkan / mengeluarkan.
+              One account can join multiple groups. Click to add / remove.
             </div>
             {assign.groups === null ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' }}>
                 <Spinner /> <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Loading groups…</span>
               </div>
             ) : assign.groups.length === 0 ? (
-              <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>Belum ada group — buat lewat kolom di bawah.</div>
+              <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>No groups yet — create one below.</div>
             ) : (
               <div className="group-pick-list">
                 {assign.groups.map((g) => {
@@ -584,7 +584,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                     <button key={g.name} type="button" className={isMember ? 'group-pick member' : 'group-pick'} onClick={() => toggleGroup(g.name)} disabled={assignBusy}>
                       <span className="group-check" aria-hidden="true">{isMember && <Check size={13} />}</span>
                       <span className="group-pick-name">{g.name}</span>
-                      <span className="group-pick-count">{g.count} akun</span>
+                      <span className="group-pick-count">{g.count} accounts</span>
                     </button>
                   )
                 })}
@@ -595,12 +595,12 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                 value={assign.newName}
                 onChange={(e) => setAssign({ ...assign, newName: e.target.value })}
                 onKeyDown={(e) => e.key === 'Enter' && createAndAssign()}
-                placeholder="Atau buat group baru, mis. Github"
+                placeholder="Or create a new group, e.g. Github"
                 disabled={assignBusy}
                 style={{ flex: 1 }}
               />
               <Button variant="primary" onClick={createAndAssign} disabled={assignBusy || !assign.newName.trim()}>
-                <Plus size={14} /> Buat & Masukkan
+                <Plus size={14} /> Create & Add
               </Button>
             </div>
           </div>
@@ -662,8 +662,8 @@ function CopyCell({ value, onCopy, masked = false }) {
           type="button"
           className="copy-btn"
           onClick={handleCopy}
-          title={copied ? 'Tersalin' : 'Salin ke clipboard'}
-          aria-label="Salin"
+          title={copied ? 'Copied' : 'Copy to clipboard'}
+          aria-label="Copy"
         >
           {copied ? '✓' : '⧉'}
         </button>

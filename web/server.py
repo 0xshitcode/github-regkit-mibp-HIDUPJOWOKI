@@ -55,15 +55,15 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
-# Auth ala n8n/WAHA: username+password dari .env untuk self-hosting/produksi.
-# Baru: GITHUB_REGISTER_USERNAME + GITHUB_REGISTER_PASSWORD.
-# Lama (kompatibel): GITHUB_REGISTER_ACCESS_PASSWORD (password-only, tanpa username).
+# Auth like n8n/WAHA: username+password from .env for self-hosting/production.
+# New: GITHUB_REGISTER_USERNAME + GITHUB_REGISTER_PASSWORD.
+# Legacy (compatible): GITHUB_REGISTER_ACCESS_PASSWORD (password-only, no username).
 AUTH_USERNAME = (os.getenv("GITHUB_REGISTER_USERNAME") or "").strip()
 AUTH_PASSWORD = (os.getenv("GITHUB_REGISTER_PASSWORD") or "").strip()
 ACCESS_PASSWORD = AUTH_PASSWORD or (os.getenv("GITHUB_REGISTER_ACCESS_PASSWORD") or "").strip()
 AUTH_ENABLED = bool(ACCESS_PASSWORD)
-# ponytail: baca IP asli dari X-Forwarded-For hanya bila di belakang proxy
-# tepercaya (spoofable bila langsung expose). Compose set =1.
+# ponytail: read the real IP from X-Forwarded-For only behind a trusted
+# proxy (spoofable when directly exposed). Compose sets =1.
 TRUST_PROXY = (os.getenv("GITHUB_REGISTER_TRUST_PROXY") or "").strip().lower() in (
     "1", "true", "yes")
 HOST = (os.getenv("GITHUB_REGISTER_HOST") or "127.0.0.1").strip()
@@ -71,7 +71,7 @@ PORT = int(os.getenv("GITHUB_REGISTER_PORT") or "8093")  # 8092 is used by grok-
 
 if AUTH_ENABLED and HOST in ("0.0.0.0", "::"):
     logging.getLogger("uvicorn.error").warning(
-        "exposed on %s — pastikan GITHUB_REGISTER_USERNAME/PASSWORD kuat + HTTPS reverse proxy",
+        "exposed on %s — make sure GITHUB_REGISTER_USERNAME/PASSWORD is strong + HTTPS reverse proxy",
         HOST,
     )
 
@@ -95,8 +95,8 @@ _sessions: Dict[str, float] = {}
 _SESSION_LOCK = threading.Lock()
 _SESSION_TTL = 86400 * 7
 
-# ponytail: rate-limit in-memory per-IP untuk /api/auth (anti brute-force);
-# cukup untuk single-user self-host, ganti reverse-proxy limit jika multi-replika
+# ponytail: in-memory per-IP rate-limit for /api/auth (anti brute-force);
+# enough for single-user self-host, use a reverse-proxy limit for multi-replica
 _AUTH_FAILS: Dict[str, Deque[float]] = {}
 _AUTH_LOCK = threading.Lock()
 _AUTH_MAX_ATTEMPTS = 10
@@ -122,13 +122,13 @@ _job_state: Dict[str, Any] = {
 app = FastAPI(
     title="GitHub Register",
     version="1.0.0",
-    # ponytail: tutup swagger publik saat auth aktif (ala n8n/waha); buka lagi saat dev tanpa auth
+    # ponytail: hide public swagger when auth is on (like n8n/waha); back on for dev without auth
     docs_url=None if AUTH_ENABLED else "/docs",
     redoc_url=None if AUTH_ENABLED else "/redoc",
     openapi_url=None if AUTH_ENABLED else "/openapi.json",
 )
 
-_AUTH_MAX_BODY = 8 * 1024  # /api/auth cuma username+password; tolak jumbo sebelum dibaca (DoS)
+_AUTH_MAX_BODY = 8 * 1024  # /api/auth is only username+password; reject jumbo before reading (DoS)
 
 
 @app.middleware("http")
@@ -141,7 +141,7 @@ async def _security_guard(request: Request, call_next):
             pass
     resp = await call_next(request)
     resp.headers["X-Content-Type-Options"] = "nosniff"
-    resp.headers["X-Frame-Options"] = "DENY"  # console admin jangan bisa di-iframe (clickjacking)
+    resp.headers["X-Frame-Options"] = "DENY"  # admin console must not be iframed (clickjacking)
     resp.headers["Referrer-Policy"] = "no-referrer"
     if request.url.path.startswith("/api/"):
         resp.headers["Cache-Control"] = "no-store"
@@ -221,7 +221,7 @@ def _public_config() -> Dict[str, Any]:
 
 
 def _safe_compare(a: str, b: str) -> bool:
-    """compare_digest tanpa 500: input non-ASCII/aneh = bukan kredensial valid."""
+    """compare_digest without 500: non-ASCII/odd input = not valid credentials."""
     try:
         return hmac.compare_digest(a, b)
     except Exception:
@@ -244,8 +244,8 @@ def _require_auth(x_access_key: Optional[str]) -> None:
 
 
 def _valid_credential(username: str, password: str) -> bool:
-    # ponytail: kedua compare selalu dijalankan (tanpa short-circuit) agar
-    # timing tidak membocorkan username valid vs tidak
+    # ponytail: always run both compares (no short-circuit) so timing
+    # does not leak valid vs invalid username
     user_ok = _safe_compare(username, AUTH_USERNAME) if AUTH_USERNAME else True
     pass_ok = _safe_compare(password, ACCESS_PASSWORD)
     return bool(user_ok and pass_ok)
@@ -260,7 +260,7 @@ def _client_ip(request: Request) -> str:
 
 
 def _auth_rate_limited(ip: str) -> float:
-    """Catat 1 percobaan gagal; return detik tunggu (>0 = ditolak). Sliding window."""
+    """Record 1 failed attempt; return wait seconds (>0 = rejected). Sliding window."""
     now = time.time()
     with _AUTH_LOCK:
         attempts = _AUTH_FAILS.setdefault(ip, collections.deque())
@@ -501,6 +501,49 @@ async def api_litensi_zones(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Unable to contact Litensi: {exc}")
     return {"ok": True, "zones": zones, "site": site, "cheapest": cheapest}
+
+
+class MailboxOrderBody(BaseModel):
+    provider: Optional[str] = None  # override config for this order only
+    domain: Optional[str] = None  # mailcx domain override
+    zone: Optional[str] = None  # litensi zone override
+
+
+@app.post("/api/mailbox/order")
+async def api_mailbox_order(
+    body: MailboxOrderBody, x_access_key: Optional[str] = Header(None)
+) -> Dict[str, Any]:
+    """Order one mailbox on demand (no signup run) — for manual email fill.
+
+    Litensi: order STAYS OPEN (balance consumed); use promptly (minutes) or
+    cancel manually in the dashboard. Mail.cx: free, no order concept.
+    """
+    _require_auth(x_access_key)
+    cfg = load_config(ROOT / "config.json")
+    provider = (body.provider or getattr(cfg, "mail_provider", "mailcx") or "mailcx").strip().lower()
+    if provider not in ("mailcx", "litensi"):
+        raise HTTPException(status_code=400, detail="provider must be mailcx or litensi")
+    try:
+        if provider == "litensi":
+            from github_register.litensi import LitensiClient, LitensiError
+            client = LitensiClient(
+                api_id=cfg.litensi_api_id,
+                api_key=cfg.litensi_api_key,
+                site=cfg.litensi_site,
+                zone=(body.zone or cfg.litensi_zone or ""),
+            )
+        else:
+            client = MailCxClient(domain=(body.domain or cfg.mailcx_domain or ""))
+        email, order_id = client.create_mailbox()
+    except (LitensiError, MailCxError) as exc:
+        raise HTTPException(status_code=502, detail=f"mailbox order failed: {exc}")
+    _append_log(f"[*] manual mailbox order: {email} ({provider}, order={order_id})")
+    note = (
+        "Order stays OPEN in Litensi — use promptly or cancel in the dashboard."
+        if provider == "litensi"
+        else "Mail.cx is free — no order/cancel."
+    )
+    return {"ok": True, "email": email, "order_id": str(order_id), "provider": provider, "note": note}
 
 
 PROXY_SCHEMES = ("http", "https", "socks4", "socks5")

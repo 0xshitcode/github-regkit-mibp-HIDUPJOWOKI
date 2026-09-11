@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Search, Save, Mail, Shield } from "lucide-react";
+import { Search, Save, Mail, Shield, Copy } from "lucide-react";
 import { api } from "../api.js";
 import { Button, Card, Input } from "./ui.jsx";
 
@@ -183,6 +183,31 @@ export default function ConfigPanel() {
 
   // mailcx domains
   const [mailcxDomains, setMailcxDomains] = useState([]);
+
+  // manual mailbox order (no signup run)
+  const [mailBusy, setMailBusy] = useState(false);
+  const [mailResult, setMailResult] = useState(null);
+  const [mailError, setMailError] = useState("");
+
+  async function orderMailbox() {
+    if (mailBusy) return;
+    setMailBusy(true);
+    setMailError("");
+    setMailResult(null);
+    try {
+      const d = await api.post("/api/mailbox/order", {});
+      setMailResult(d);
+      try {
+        await navigator.clipboard.writeText(d.email);
+      } catch {
+        /* clipboard optional — email stays visible */
+      }
+    } catch (e) {
+      setMailError(e.message || "Order failed");
+    } finally {
+      setMailBusy(false);
+    }
+  }
 
   useEffect(() => {
     api
@@ -373,6 +398,52 @@ export default function ConfigPanel() {
                 </>
               )}
             </div>
+
+            {/* manual order: email ready to fill without running signup */}
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                marginTop: 10,
+                flexWrap: "wrap",
+              }}
+            >
+              <Button size="sm" onClick={orderMailbox} disabled={mailBusy}>
+                <Mail size={14} /> {mailBusy ? "Ordering..." : "Order mailbox"}
+              </Button>
+              {mailResult && (
+                <span style={{ fontSize: 13 }}>
+                  <code>{mailResult.email}</code>{" "}
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      navigator.clipboard
+                        .writeText(mailResult.email)
+                        .catch(() => {})
+                    }
+                  >
+                    <Copy size={13} /> Copy
+                  </Button>
+                </span>
+              )}
+              {mailError && (
+                <span style={{ fontSize: 12, color: "var(--danger)" }}>
+                  ✗ {mailError}
+                </span>
+              )}
+            </div>
+            {mailResult?.note && (
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--muted)",
+                  marginTop: 6,
+                }}
+              >
+                {mailResult.note} (auto-copy ke clipboard)
+              </div>
+            )}
           </Card>
 
           {/* ── Registration card ── */}

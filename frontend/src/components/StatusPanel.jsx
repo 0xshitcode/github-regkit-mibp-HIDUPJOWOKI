@@ -21,7 +21,7 @@ import { Badge, Button, Card, Input } from "./ui.jsx";
 import LogViewer from "./LogViewer.jsx";
 
 const fmtTime = (ts) =>
-  ts ? new Date(ts * 1000).toLocaleTimeString("id-ID", { hour12: false }) : "—";
+  ts ? new Date(ts * 1000).toLocaleTimeString("en-US", { hour12: false }) : "—";
 
 const fmtDuration = (sec) => {
   if (!Number.isFinite(sec) || sec < 0) return "—";

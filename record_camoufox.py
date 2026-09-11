@@ -214,7 +214,7 @@ def _warn_if_warp_ip(cfg=None, log=print) -> None:
         effective = _ensure_sticky_proxy(cfg.proxy, log=log)
         p = _us(effective.strip())
         masked = f"{p.scheme}://{p.hostname}:{p.port or ''}"
-        log(f"[*] browser akan jalan via proxy: {masked}")
+        log(f"[*] browser will run via proxy: {masked}")
         if (p.scheme or "").lower().startswith("socks"):
             try:
                 exit_ip = _socks_exit_ip(effective)
