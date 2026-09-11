@@ -344,6 +344,7 @@ Its output can contain email addresses, session URLs, and selectors. Treat
 | VPS runs old code | The image is stale — `git pull` then `docker compose up -d --build` on the VPS. |
 | `config.json`/`proxies.txt` became directories | They did not exist before `up`, so docker created folders. `rm -rf` them, create real files (`cp`/`touch`), then `up` again. |
 | VPS IP port 80/443 unreachable | Nothing listening or firewall closed: check `docker ps`, `curl http://127.0.0.1:80` on the host, `ufw status`, and the cloud security group. The app itself exposes no ports — traffic must flow through nginx. |
+| Every `/api/*` returns 403 after redeploy | Stale token: sessions live in server memory and die on restart, while the browser keeps the old token. Reload the page — the UI now detects this and returns to the login screen automatically. Just log in again. |
 | DataDome hard block or signup 403 | Change IP/proxy, disable VPN/WARP, then retry after a delay. |
 | Create account or repository will not click | Review Live Log. Native clicks fall back to DOM clicks when an overlay intercepts them. |
 | Web UI does not reflect frontend changes | Run `npm run build`, then restart `python -m web.server`. |

@@ -9,6 +9,21 @@ export function setToken(token) {
   else localStorage.removeItem(TOKEN_KEY)
 }
 
+let _reloading = false
+function authFailed(url) {
+  // Login/logout endpoints report credential errors themselves — anything
+  // else with 401/403 means the stored token is dead (e.g. server restarted
+  // and wiped in-memory sessions): drop it and force a fresh login instead
+  // of failing every poll silently forever.
+  if (url.includes('/api/auth') || url.includes('/api/logout')) return false
+  setToken('')
+  if (!_reloading) {
+    _reloading = true
+    window.location.reload()
+  }
+  return true
+}
+
 async function request(method, url, body) {
   const headers = { 'Content-Type': 'application/json' }
   const token = getToken()
@@ -19,6 +34,7 @@ async function request(method, url, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (resp.status === 401 || resp.status === 403) {
+    if (authFailed(url)) throw new Error('session expired — please log in again')
     throw new Error('unauthorized')
   }
   const data = await resp.json().catch(() => ({}))
@@ -33,7 +49,10 @@ async function uploadFile(url, file) {
   const token = getToken()
   if (token) headers['X-Access-Key'] = token
   const resp = await fetch(url, { method: 'POST', headers, body: file })
-  if (resp.status === 401 || resp.status === 403) throw new Error('unauthorized')
+  if (resp.status === 401 || resp.status === 403) {
+    if (authFailed(url)) throw new Error('session expired — please log in again')
+    throw new Error('unauthorized')
+  }
   const data = await resp.json().catch(() => ({}))
   if (!resp.ok || data.ok === false) throw new Error(data.detail || data.message || `HTTP ${resp.status}`)
   return data
@@ -52,7 +71,10 @@ export async function subscribeLogs(after, onLine) {
   const headers = {}
   if (token) headers['X-Access-Key'] = token
   const resp = await fetch('/api/logs?after=' + after, { headers })
-  if (!resp.ok) throw new Error('log stream failed')
+  if (!resp.ok) {
+    if (resp.status === 401 || resp.status === 403) authFailed('/api/logs')
+    throw new Error('log stream failed')
+  }
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
