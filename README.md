@@ -183,6 +183,59 @@ per IP (10 failures/60s → HTTP 429), oversized login bodies are rejected
 and Sign out invalidates the server-side session via `POST /api/logout`.
 The server binds to `127.0.0.1` by default — only bind `0.0.0.0` behind a trusted reverse proxy with HTTPS.
 
+### Docker
+
+Image multi-stage: `node:20-alpine` (build frontend) + `python:3.12-slim`
+(runtime, sudah termasuk Firefox Camoufox + `xvfb` untuk mode headful):
+
+```bash
+cp .env.example .env          # isi GITHUB_REGISTER_PASSWORD yang kuat
+cp config.example.json config.json
+touch proxies.txt
+docker compose up -d --build
+```
+
+Buka <http://localhost:8093>. Compose menimpa `GITHUB_REGISTER_HOST=0.0.0.0`
+di dalam container; data persisten via bind-mount (`config.json`, `accounts/`,
+`.browser-profile/`, `proxies.txt`). Untuk VPS tanpa display, set
+`"headless": true` di `config.json` (lebih hemat, sedikit lebih mudah
+diflag DataDome).
+
+### VPS + nginx reverse proxy (satu network docker)
+
+Compose sudah gabung ke network eksternal `nginx-network` dan **tidak**
+publish port — akses publik hanya lewat nginx. Pastikan network ada:
+
+```bash
+docker network ls | grep nginx-network || docker network create nginx-network
+docker compose up -d --build
+```
+
+Contoh server block di nginx (satu network yang sama, TLS via certbot):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name regkit.contoh.com;
+
+    location / {
+        proxy_pass http://app:8093;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # SSE live-log: jangan buffer + jangan putus cepat
+        proxy_buffering off;
+        proxy_read_timeout 86400s;
+    }
+}
+```
+
+`GITHUB_REGISTER_TRUST_PROXY=1` (sudah di compose) membuat rate-limit membaca
+IP asli dari `X-Forwarded-For`. Jangan aktifkan bila container di-expose
+langsung tanpa proxy.
+
 ### CLI
 
 ```bash

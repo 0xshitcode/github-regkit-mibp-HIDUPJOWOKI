@@ -62,6 +62,10 @@ AUTH_USERNAME = (os.getenv("GITHUB_REGISTER_USERNAME") or "").strip()
 AUTH_PASSWORD = (os.getenv("GITHUB_REGISTER_PASSWORD") or "").strip()
 ACCESS_PASSWORD = AUTH_PASSWORD or (os.getenv("GITHUB_REGISTER_ACCESS_PASSWORD") or "").strip()
 AUTH_ENABLED = bool(ACCESS_PASSWORD)
+# ponytail: baca IP asli dari X-Forwarded-For hanya bila di belakang proxy
+# tepercaya (spoofable bila langsung expose). Compose set =1.
+TRUST_PROXY = (os.getenv("GITHUB_REGISTER_TRUST_PROXY") or "").strip().lower() in (
+    "1", "true", "yes")
 HOST = (os.getenv("GITHUB_REGISTER_HOST") or "127.0.0.1").strip()
 PORT = int(os.getenv("GITHUB_REGISTER_PORT") or "8093")  # 8092 is used by grok-regkit (Chromium)
 
@@ -247,6 +251,14 @@ def _valid_credential(username: str, password: str) -> bool:
     return bool(user_ok and pass_ok)
 
 
+def _client_ip(request: Request) -> str:
+    if TRUST_PROXY:
+        xff = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+        if xff:
+            return xff
+    return request.client.host if request.client else "unknown"
+
+
 def _auth_rate_limited(ip: str) -> float:
     """Catat 1 percobaan gagal; return detik tunggu (>0 = ditolak). Sliding window."""
     now = time.time()
@@ -386,7 +398,7 @@ async def api_auth(body: AuthBody, request: Request) -> Dict[str, Any]:
     if not AUTH_ENABLED:
         return {"ok": True, "needs_auth": False, "token": ""}
     if not _valid_credential((body.username or "").strip(), (body.password or "").strip()):
-        ip = (request.client.host if request.client else "unknown")
+        ip = _client_ip(request)
         wait = _auth_rate_limited(ip)
         if wait > 0:
             return JSONResponse(
@@ -395,7 +407,7 @@ async def api_auth(body: AuthBody, request: Request) -> Dict[str, Any]:
                 headers={"Retry-After": str(int(wait))},
             )
         return JSONResponse({"ok": False, "detail": "invalid username or password"}, status_code=403)
-    _auth_reset(request.client.host if request.client else "unknown")
+    _auth_reset(_client_ip(request))
     return {"ok": True, "needs_auth": True, "token": _issue_token()}
 
 

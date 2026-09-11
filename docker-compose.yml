@@ -1,0 +1,39 @@
+name: github-regkit
+
+services:
+  app:
+    build: .
+    image: github-regkit-mibp:latest
+    container_name: github-regkit
+    restart: unless-stopped
+    # .env dibaca dulu, lalu environment di bawah menimpa (HOST wajib 0.0.0.0 di container).
+    env_file:
+      - .env
+    environment:
+      GITHUB_REGISTER_HOST: 0.0.0.0
+      GITHUB_REGISTER_PORT: 8093
+      # Nginx mengisi X-Forwarded-For; wajib agar rate-limit baca IP asli,
+      # bukan IP container nginx. Hanya aktifkan di belakang proxy tepercaya.
+      GITHUB_REGISTER_TRUST_PROXY: 1
+    # Internal saja — akses publik HANYA via nginx di network yang sama.
+    expose:
+      - "8093"
+    volumes:
+      # Wajib ada di host SEBELUM up (kalau tidak, docker membuat direktori):
+      #   cp config.example.json config.json && touch proxies.txt
+      - ./config.json:/app/config.json
+      - ./accounts:/app/accounts
+      - ./.browser-profile:/app/.browser-profile
+      - ./proxies.txt:/app/proxies.txt
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8093/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - nginx-network
+
+networks:
+  nginx-network:
+    external: true
