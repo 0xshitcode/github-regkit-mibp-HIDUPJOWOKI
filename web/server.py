@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -36,9 +37,39 @@ from github_register.runner import load_proxy_pool, run_job, silence_playwright_
 
 silence_playwright_noise()  # hide TargetClosedError spam when browsers close
 
-ACCESS_PASSWORD = (os.getenv("GITHUB_REGISTER_ACCESS_PASSWORD") or "").strip()
+
+def _load_dotenv() -> None:
+    """Minimal .env loader (stdlib only): KEY=VALUE, # comments, quoted values."""
+    env_file = ROOT / ".env"
+    if not env_file.is_file():
+        return
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip().strip("'\"")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+_load_dotenv()
+
+# Auth ala n8n/WAHA: username+password dari .env untuk self-hosting/produksi.
+# Baru: GITHUB_REGISTER_USERNAME + GITHUB_REGISTER_PASSWORD.
+# Lama (kompatibel): GITHUB_REGISTER_ACCESS_PASSWORD (password-only, tanpa username).
+AUTH_USERNAME = (os.getenv("GITHUB_REGISTER_USERNAME") or "").strip()
+AUTH_PASSWORD = (os.getenv("GITHUB_REGISTER_PASSWORD") or "").strip()
+ACCESS_PASSWORD = AUTH_PASSWORD or (os.getenv("GITHUB_REGISTER_ACCESS_PASSWORD") or "").strip()
+AUTH_ENABLED = bool(ACCESS_PASSWORD)
 HOST = (os.getenv("GITHUB_REGISTER_HOST") or "127.0.0.1").strip()
 PORT = int(os.getenv("GITHUB_REGISTER_PORT") or "8093")  # 8092 is used by grok-regkit (Chromium)
+
+if AUTH_ENABLED and HOST in ("0.0.0.0", "::"):
+    logging.getLogger("uvicorn.error").warning(
+        "exposed on %s — pastikan GITHUB_REGISTER_USERNAME/PASSWORD kuat + HTTPS reverse proxy",
+        HOST,
+    )
 
 DIST = ROOT / "frontend" / "dist"
 
@@ -57,7 +88,15 @@ def _migrate_legacy_account_files() -> None:
 _migrate_legacy_account_files()
 
 _sessions: Dict[str, float] = {}
+_SESSION_LOCK = threading.Lock()
 _SESSION_TTL = 86400 * 7
+
+# ponytail: rate-limit in-memory per-IP untuk /api/auth (anti brute-force);
+# cukup untuk single-user self-host, ganti reverse-proxy limit jika multi-replika
+_AUTH_FAILS: Dict[str, Deque[float]] = {}
+_AUTH_LOCK = threading.Lock()
+_AUTH_MAX_ATTEMPTS = 10
+_AUTH_WINDOW_SEC = 60.0
 
 _job_lock = threading.Lock()
 _job_thread: Optional[threading.Thread] = None
@@ -76,7 +115,33 @@ _job_state: Dict[str, Any] = {
     "accounts_file": "",
 }
 
-app = FastAPI(title="GitHub Register", version="1.0.0")
+app = FastAPI(
+    title="GitHub Register",
+    version="1.0.0",
+    # ponytail: tutup swagger publik saat auth aktif (ala n8n/waha); buka lagi saat dev tanpa auth
+    docs_url=None if AUTH_ENABLED else "/docs",
+    redoc_url=None if AUTH_ENABLED else "/redoc",
+    openapi_url=None if AUTH_ENABLED else "/openapi.json",
+)
+
+_AUTH_MAX_BODY = 8 * 1024  # /api/auth cuma username+password; tolak jumbo sebelum dibaca (DoS)
+
+
+@app.middleware("http")
+async def _security_guard(request: Request, call_next):
+    if request.url.path == "/api/auth":
+        try:
+            if int(request.headers.get("content-length") or 0) > _AUTH_MAX_BODY:
+                return JSONResponse({"ok": False, "detail": "request too large"}, status_code=413)
+        except ValueError:
+            pass
+    resp = await call_next(request)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"  # console admin jangan bisa di-iframe (clickjacking)
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    if request.url.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 class _QuietSSECancellation(logging.Filter):
@@ -151,30 +216,64 @@ def _public_config() -> Dict[str, Any]:
     return masked
 
 
+def _safe_compare(a: str, b: str) -> bool:
+    """compare_digest tanpa 500: input non-ASCII/aneh = bukan kredensial valid."""
+    try:
+        return hmac.compare_digest(a, b)
+    except Exception:
+        return False
+
+
 def _require_auth(x_access_key: Optional[str]) -> None:
-    if not ACCESS_PASSWORD:
+    if not AUTH_ENABLED:
         return
     key = (x_access_key or "").strip()
     if not key:
         raise HTTPException(status_code=401, detail="access key required")
-    if key == ACCESS_PASSWORD:
-        return
-    exp = _sessions.get(key)
-    if exp and exp > time.time():
-        return
-    if exp:
-        _sessions.pop(key, None)
+    with _SESSION_LOCK:
+        exp = _sessions.get(key)
+        if exp and exp > time.time():
+            return
+        if exp:
+            _sessions.pop(key, None)
     raise HTTPException(status_code=403, detail="invalid access key")
 
 
-def _issue_token(password: str) -> str:
-    raw = f"{password}:{secrets.token_hex(16)}:{time.time()}"
-    token = hashlib.sha256(raw.encode()).hexdigest()
-    _sessions[token] = time.time() + _SESSION_TTL
+def _valid_credential(username: str, password: str) -> bool:
+    # ponytail: kedua compare selalu dijalankan (tanpa short-circuit) agar
+    # timing tidak membocorkan username valid vs tidak
+    user_ok = _safe_compare(username, AUTH_USERNAME) if AUTH_USERNAME else True
+    pass_ok = _safe_compare(password, ACCESS_PASSWORD)
+    return bool(user_ok and pass_ok)
+
+
+def _auth_rate_limited(ip: str) -> float:
+    """Catat 1 percobaan gagal; return detik tunggu (>0 = ditolak). Sliding window."""
+    now = time.time()
+    with _AUTH_LOCK:
+        attempts = _AUTH_FAILS.setdefault(ip, collections.deque())
+        while attempts and now - attempts[0] > _AUTH_WINDOW_SEC:
+            attempts.popleft()
+        if len(attempts) >= _AUTH_MAX_ATTEMPTS:
+            return max(1.0, _AUTH_WINDOW_SEC - (now - attempts[0]))
+        attempts.append(now)
+        return 0.0
+
+
+def _auth_reset(ip: str) -> None:
+    with _AUTH_LOCK:
+        _AUTH_FAILS.pop(ip, None)
+
+
+def _issue_token() -> str:
+    token = secrets.token_urlsafe(32)
+    with _SESSION_LOCK:
+        _sessions[token] = time.time() + _SESSION_TTL
     return token
 
 
 class AuthBody(BaseModel):
+    username: str = ""
     password: str = ""
 
 
@@ -276,24 +375,43 @@ async def health() -> Dict[str, Any]:
 
 
 @app.get("/monitor/status")
-async def monitor_status() -> Dict[str, Any]:
+async def monitor_status(x_access_key: Optional[str] = Header(None)) -> Dict[str, Any]:
+    _require_auth(x_access_key)
     with _job_lock:
         return {"ok": True, "service": "github-register", "running_job": bool(_job_state["running"])}
 
 
 @app.post("/api/auth")
-async def api_auth(body: AuthBody) -> Dict[str, Any]:
-    if not ACCESS_PASSWORD:
+async def api_auth(body: AuthBody, request: Request) -> Dict[str, Any]:
+    if not AUTH_ENABLED:
         return {"ok": True, "needs_auth": False, "token": ""}
-    if (body.password or "").strip() != ACCESS_PASSWORD:
-        return JSONResponse({"ok": False, "detail": "invalid password"}, status_code=403)
-    return {"ok": True, "needs_auth": True, "token": _issue_token(body.password.strip())}
+    if not _valid_credential((body.username or "").strip(), (body.password or "").strip()):
+        ip = (request.client.host if request.client else "unknown")
+        wait = _auth_rate_limited(ip)
+        if wait > 0:
+            return JSONResponse(
+                {"ok": False, "detail": f"too many attempts, retry in {int(wait)}s"},
+                status_code=429,
+                headers={"Retry-After": str(int(wait))},
+            )
+        return JSONResponse({"ok": False, "detail": "invalid username or password"}, status_code=403)
+    _auth_reset(request.client.host if request.client else "unknown")
+    return {"ok": True, "needs_auth": True, "token": _issue_token()}
+
+
+@app.post("/api/logout")
+async def api_logout(x_access_key: Optional[str] = Header(None)) -> Dict[str, Any]:
+    key = (x_access_key or "").strip()
+    if AUTH_ENABLED and key:
+        with _SESSION_LOCK:
+            _sessions.pop(key, None)
+    return {"ok": True}
 
 
 @app.get("/api/config")
 async def api_get_config(x_access_key: Optional[str] = Header(None)) -> Dict[str, Any]:
     _require_auth(x_access_key)
-    return {"ok": True, "config": _public_config(), "needs_auth": bool(ACCESS_PASSWORD)}
+    return {"ok": True, "config": _public_config(), "needs_auth": AUTH_ENABLED}
 
 
 @app.put("/api/config")

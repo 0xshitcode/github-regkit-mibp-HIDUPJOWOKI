@@ -158,15 +158,30 @@ Open <http://127.0.0.1:8093>.
 - **Accounts**: export accounts, copy values, generate TOTP codes, and view
   recovery codes.
 
-Protect the web console with a password when needed:
+Protect the web console with username + password (ala n8n/WAHA) for
+self-hosting/production. Copy `.env.example` to `.env` and fill it in
+(`.env` is git-ignored; server auto-loads it, no extra dependency):
 
 ```bash
-export GITHUB_REGISTER_ACCESS_PASSWORD='use-a-strong-password'
+cp .env.example .env
 python -m web.server
 ```
 
-The server binds to `127.0.0.1` by default. Do not expose it publicly without
-authentication and secure transport.
+```dotenv
+GITHUB_REGISTER_HOST=127.0.0.1
+GITHUB_REGISTER_PORT=8093
+GITHUB_REGISTER_USERNAME=admin
+GITHUB_REGISTER_PASSWORD=use-a-strong-password
+```
+
+Legacy single-password mode still works (`GITHUB_REGISTER_ACCESS_PASSWORD`),
+but username+password is preferred. When auth is enabled, `/docs` swagger
+is disabled and all `/api/*` require login. Login attempts are rate-limited
+per IP (10 failures/60s → HTTP 429), oversized login bodies are rejected
+(413), credential comparison is timing-safe, security headers are set
+(`nosniff`, `DENY` framing, `no-referrer`, `no-store` on APIs),
+and Sign out invalidates the server-side session via `POST /api/logout`.
+The server binds to `127.0.0.1` by default — only bind `0.0.0.0` behind a trusted reverse proxy with HTTPS.
 
 ### CLI
 

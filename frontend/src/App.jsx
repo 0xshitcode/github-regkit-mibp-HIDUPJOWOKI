@@ -36,6 +36,7 @@ const NAV = [
 export default function App() {
   const [auth, setAuth] = useState(null);
   const [tab, setTab] = useState("status");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [running, setRunning] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -120,9 +121,10 @@ export default function App() {
 
   async function doLogin() {
     try {
-      const data = await api.post("/api/auth", { password });
+      const data = await api.post("/api/auth", { username, password });
       setToken(data.token);
       setAuth({ needs: data.needs_auth });
+      setUsername("");
       setPassword("");
     } catch (error) {
       alert(`Login failed: ${error.message}`);
@@ -144,10 +146,19 @@ export default function App() {
             <ShieldCheck size={26} />
           </div>
           <h1>GitHub Register</h1>
-          <p>Enter the access password to open the console.</p>
+          <p>Enter your username and password to open the console.</p>
+          <Input
+            type="text"
+            placeholder="Username"
+            autoComplete="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && doLogin()}
+          />
           <Input
             type="password"
-            placeholder="Access password"
+            placeholder="Password"
+            autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && doLogin()}
@@ -277,7 +288,12 @@ export default function App() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => {
+              onClick={async () => {
+                try {
+                  await api.post("/api/logout", {});
+                } catch {
+                  /* token kadaluarsa = sudah logout, lanjut bersihkan lokal */
+                }
                 setToken("");
                 window.location.reload();
               }}
