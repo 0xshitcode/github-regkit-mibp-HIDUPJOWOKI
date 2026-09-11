@@ -18,7 +18,7 @@ WORKDIR /app
 # Deps Firefox headful/headless + virtual display + healthcheck.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl xvfb \
-        libgtk-3-0 libdbus-glib-1-2 libxt6 libasound2t64 \
+        libgtk-3-0 libdbus-glib-1-2 libxt6 libasound2 \
         libnss3 libxss1 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 \
         libpango-1.0-0 libcairo2 libatk1.0-0 libatk-bridge2.0-0 \
         libcups2 libdrm2 libxkbcommon0 libgbm1 fonts-liberation \
