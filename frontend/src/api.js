@@ -13,9 +13,11 @@ let _reloading = false
 function authFailed(url) {
   // Login/logout endpoints report credential errors themselves — anything
   // else with 401/403 means the stored token is dead (e.g. server restarted
-  // and wiped in-memory sessions): drop it and force a fresh login instead
-  // of failing every poll silently forever.
+  // and wiped in-memory sessions): drop it and force a fresh login.
+  // No stored token + 401/403 is just the logged-out probe (e.g. the initial
+  // /api/config check) — never reload or the login screen loops forever.
   if (url.includes('/api/auth') || url.includes('/api/logout')) return false
+  if (!getToken()) return false
   setToken('')
   if (!_reloading) {
     _reloading = true
