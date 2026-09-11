@@ -274,9 +274,12 @@ Press `Ctrl+C` to stop the CLI or server. A `KeyboardInterrupt` or
 
 ## Registration Flow
 
-1. Create a mailbox with the configured provider (mail.cx is implicit and
-   free; Litensi orders a zone, auto-picking the cheapest in-stock zone when
-   `litensi_zone` is blank).
+1. Open the signup page and fight through DataDome until the form is ready.
+2. Only then order a mailbox with the configured provider (mail.cx is
+   implicit and free; Litensi orders a zone, auto-picking the cheapest
+   in-stock zone when `litensi_zone` is blank). Ordering late avoids burning
+   balance/expiry while DataDome eats time; a provider failure (empty
+   balance, bad key) aborts the job immediately.
 2. Open GitHub signup and fill email, password, and a username based on the
    mailbox local part.
 3. Submit the form. If an overlay intercepts pointer clicks, the runner falls

@@ -2019,10 +2019,10 @@ def _post_form_flow(
 
 def _run_signup(
     cfg: Config,
-    email: str,
     password: str,
     mail: MailCxClient,
-    order_id: str,
+    provider: str,
+    pending: dict,
     log,
     stop,
 ) -> tuple[str, str]:
@@ -2064,6 +2064,17 @@ def _run_signup(
             page.set_default_timeout(20_000)
             _open_signup(page, log, stop=stop, attempts=2 if session_attempt > 1 else 3)
             _reject_blocked(page)
+
+            if "email" not in pending:
+                # Order the mailbox ONLY now that the form is ready — a Litensi
+                # order costs balance and expires in minutes, so never open it
+                # while DataDome may still burn time. Created once, reused
+                # across Tier-1 reloads and Tier-2 session switches.
+                # Provider errors (empty balance, bad key) propagate as-is so
+                # the caller aborts the job instead of failing every account.
+                pending["email"], pending["order_id"] = mail.create_mailbox()
+                log(f"[*] mailbox: {pending['email']} ({provider})")
+            email = pending["email"]
 
             # --- Tier 1: in-session page reloads with same data ---
             page_last_exc: Exception | None = None
@@ -2140,7 +2151,7 @@ def _run_signup(
             # form accepted — continue with the rest of the flow in this same session
             return _post_form_flow(
                 page, context, cfg, email, password, username,
-                mail, order_id, log, stop,
+                mail, pending["order_id"], log, stop,
             )
             # non-SignupError exceptions propagate immediately (with-block closes browser)
     raise SignupError(
@@ -2155,7 +2166,8 @@ def register_one(
     """Register one account; returns its one-line account record or None."""
     stop = cancel_cb or (lambda: False)
 
-    # --- create mail client based on provider ---
+    # --- create mail client based on provider (order itself is deferred
+    # until the signup form is ready — see _run_signup) ---
     provider = getattr(cfg, "mail_provider", "mailcx") or "mailcx"
     if provider == "litensi":
         mail = LitensiClient(
@@ -2166,8 +2178,7 @@ def register_one(
         )
     else:
         mail = MailCxClient(domain=cfg.mailcx_domain)
-    email, order_id = mail.create_mailbox()
-    log(f"[*] mailbox: {email} ({provider})")
+    pending: dict = {}
 
     succeeded = False
     try:
@@ -2179,7 +2190,7 @@ def register_one(
             _raise_if_cancelled(stop)
             try:
                 username, totp_secret, recovery = _run_signup(
-                    cfg, email, password, mail, order_id, log, stop
+                    cfg, password, mail, provider, pending, log, stop
                 )
                 break
             except SignupBlocked as exc:
@@ -2202,6 +2213,7 @@ def register_one(
         # This fifth marker lets the account UI show the recovery-code action
         # without exposing the codes in the main account list.
         succeeded = True
+        email = pending["email"]
         return f"{email}----{password}----{username}----{totp_secret}----{int(bool(recovery))}"
     except KeyboardInterrupt:
         raise
@@ -2209,11 +2221,17 @@ def register_one(
         raise
     except GitHubRateLimited:
         raise
+    except (MailCxError, LitensiError) as exc:
+        # Provider failure (empty balance, bad key, no stock): surface the
+        # error and stop — retrying the next account would fail identically.
+        log(f"[!] mail provider error, aborting: {exc}")
+        raise
     except Exception as exc:
         log(f"[-] account failed: {exc}")
         return None
     finally:
-        if provider == "litensi":
+        order_id = pending.get("order_id")
+        if provider == "litensi" and order_id is not None:
             # Confirm or cancel the Litensi order based on the actual outcome.
             # Before: this branch always canceled — that discarded successful
             # orders (docs say the caller MUST setstatus SUCCESS once the
@@ -2223,7 +2241,9 @@ def register_one(
                 _confirm_order(mail, order_id, log)
             else:
                 _cancel_order(mail, order_id, log)
-        else:
+        elif provider != "litensi":
+            log("[*] mailbox cleanup: no action needed (mail.cx)")
+        # else: form never became ready — no order was ever placed, nothing to settle
             log("[*] mailbox cleanup: no action needed (mail.cx)")
 
 
