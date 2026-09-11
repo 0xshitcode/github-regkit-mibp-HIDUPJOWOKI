@@ -191,13 +191,17 @@ Image multi-stage: `node:20-alpine` (build frontend) + `python:3.12-slim`
 ```bash
 cp .env.example .env          # isi GITHUB_REGISTER_PASSWORD yang kuat
 cp config.example.json config.json
-touch proxies.txt
+touch proxies.txt .datadome-trust.json github_recovery_codes.txt
 docker compose up -d --build
 ```
 
 Buka <http://localhost:8093>. Compose menimpa `GITHUB_REGISTER_HOST=0.0.0.0`
-di dalam container; data persisten via bind-mount (`config.json`, `accounts/`,
-`.browser-profile/`, `proxies.txt`). Untuk VPS tanpa display, set
+di dalam container. Semua file di bawah persisten di host via bind-mount
+(jangan hapus): `config.json`, `accounts/` (`github_accounts_*.txt`,
+`recovery/`, `groups.json`), `.browser-profile/`, `proxies.txt`,
+`.datadome-trust.json` (trust cookie — hilang = DataDome 403 dari nol lagi),
+`github_recovery_codes.txt`. Yang tidak persisten dan wajar hilang saat
+restart: session login web (di memori — login ulang). Untuk VPS tanpa display, set
 `"headless": true` di `config.json` (lebih hemat, sedikit lebih mudah
 diflag DataDome).
 

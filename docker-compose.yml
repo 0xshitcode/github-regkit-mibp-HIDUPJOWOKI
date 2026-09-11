@@ -20,11 +20,14 @@ services:
       - "8093"
     volumes:
       # Wajib ada di host SEBELUM up (kalau tidak, docker membuat direktori):
-      #   cp config.example.json config.json && touch proxies.txt
+      #   cp config.example.json config.json && touch proxies.txt .datadome-trust.json github_recovery_codes.txt
       - ./config.json:/app/config.json
       - ./accounts:/app/accounts
       - ./.browser-profile:/app/.browser-profile
       - ./proxies.txt:/app/proxies.txt
+      # trust cookie DataDome + backup recovery codes — hilang = 403 dari nol lagi
+      - ./.datadome-trust.json:/app/.datadome-trust.json
+      - ./github_recovery_codes.txt:/app/github_recovery_codes.txt
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8093/health"]
       interval: 30s
