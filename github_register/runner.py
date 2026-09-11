@@ -211,7 +211,9 @@ def _socks_exit_ip(url: str, timeout: int = 12) -> str:
                 last_exc = exc
         if attempt == 0:
             time.sleep(3)  # give the sticky session a moment to warm up
-    raise SignupError(f"socks exit-IP lookup failed: {last_exc}")
+    raise SignupError(f"exit-IP lookup via proxy gagal: {last_exc} "
+                        f"(cek scheme http/https/socks5, user:pass, dan port di proxies.txt — "
+                        f"'405/407' = proxy menolak CONNECT/auth)")
 
 
 # ---------------------------------------------------------------------------
