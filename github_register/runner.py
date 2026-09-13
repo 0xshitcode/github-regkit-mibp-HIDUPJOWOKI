@@ -723,73 +723,72 @@ def _form_ready(page) -> bool:
         return False
 
 
-def _open_signup(page, log, attempts: int = 3, stop=None, headless: bool = False) -> None:
-    """Open github.com/signup and fight through DataDome retries/challenge.
+SIGNUP_HOME_URL = "https://github.com/?utm_source=google"
+SIGNUP_URL = "https://github.com/signup"
+_HARD_BLOCK_MSG = (
+    "DataDome HARD BLOCK: 'Access is temporarily restricted' — this IP is "
+    "temporarily blocked by GitHub. Change IP, disable VPN/WARP, change network, "
+    "or configure a residential proxy and retry."
+)
 
-    Strategy: direct goto first; on DataDome, try the human path
-    (homepage -> click 'Sign up' link) which carries a warm session,
-    then retry direct loads. Manual solve window is given at the end.
+
+def _wait_for_signup(page, log, stop, seconds: int) -> bool:
+    """Wait `seconds` for the email form, poking a DataDome challenge if shown.
+
+    Raises SignupBlocked on a hard block and GitHubRateLimited on a rate limit
+    so the caller's retry policy still applies. Returns False on timeout.
     """
-    sel = ", ".join(_EMAIL_INPUTS)
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        _raise_if_cancelled(stop)
+        _raise_if_rate_limited(page)
+        if _is_hard_block(page):
+            raise SignupBlocked(_HARD_BLOCK_MSG)
+        if _form_ready(page):
+            return True
+        _try_click_datadome(page, log)
+        _sleep_with_cancel(2, stop)
+    return False
+
+
+def _open_signup(page, log, attempts: int = 3, stop=None, headless: bool = False) -> None:
+    """Open github.com/signup the way a visitor arrives from a search result.
+
+    Entry is the GitHub homepage with a Google referral query, then the header
+    "Sign up" link, so the session carries a referral instead of a cold direct
+    hit. A direct /signup load is the fallback when the link is missing or the
+    form never renders. A manual solve window is given at the end in headed mode.
+    """
     last_hint = ""
-    goto_ok = True
     for attempt in range(1, attempts + 1):
         _raise_if_cancelled(stop)
         try:
-            if goto_ok:
-                page.goto("https://github.com/signup", wait_until="domcontentloaded", timeout=60_000)
+            log(f"[*] opening {SIGNUP_HOME_URL}")
+            page.goto(SIGNUP_HOME_URL, wait_until="domcontentloaded", timeout=60_000)
         except Exception as exc:
-            log(f"[!] goto failed ({exc}); retry {attempt}/{attempts}")
-            goto_ok = False
-        # wait up to 25s for the email form (JS render) or a stable challenge page
-        deadline = time.time() + 25
-        while time.time() < deadline:
-            _raise_if_cancelled(stop)
-            _raise_if_rate_limited(page)
-            if _is_hard_block(page):
-                raise SignupBlocked(
-                    "DataDome HARD BLOCK: 'Access is temporarily restricted' — this IP is "
-                    "temporarily blocked by GitHub. Change IP, disable VPN/WARP, change network, "
-                    "or configure a residential proxy and retry."
-                )
-            if _form_ready(page):
-                log("[*] github.com/signup email form is ready")
-                return
-            hint = _challenge_hint(page)
-            if hint:
-                last_hint = hint
-                _try_click_datadome(page, log)
-            _sleep_with_cancel(2, stop)
-        if last_hint and attempt == 1:
-            # human-like navigation: homepage -> Sign up link (warmer session)
+            log(f"[!] goto homepage failed ({exc}); retry {attempt}/{attempts}")
+        # homepage -> "Sign up" link: the navigation a real visitor follows
+        try:
+            link = page.get_by_role("link", name="Sign up").first
+            if link.count():
+                link.click(timeout=10_000)
+        except Exception as exc:
+            log(f"[i] 'Sign up' link skipped: {exc}")
+        if _wait_for_signup(page, log, stop, 30):
+            log("[*] github.com/signup email form is ready")
+            return
+        last_hint = _challenge_hint(page) or last_hint
+        if attempt < attempts:
+            # fallback: cold direct load, still inside the retry budget
             try:
                 _raise_if_cancelled(stop)
-                log("[*] DataDome hit — trying homepage -> 'Sign up' navigation")
-                page.goto("https://github.com/", wait_until="domcontentloaded", timeout=60_000)
-                if _is_hard_block(page):
-                    raise SignupBlocked(
-                        "DataDome HARD BLOCK: 'Access is temporarily restricted' — this IP is "
-                        "temporarily blocked by GitHub. Change IP, disable VPN/WARP, change network, "
-                        "or configure a residential proxy and retry."
-                    )
-                _sleep_with_cancel(2, stop)
-                link = page.get_by_role("link", name="Sign up").first
-                if link.count():
-                    link.click(timeout=10_000)
-                else:
-                    page.goto("https://github.com/signup", wait_until="domcontentloaded", timeout=60_000)
-                deadline = time.time() + 30
-                while time.time() < deadline:
-                    _raise_if_cancelled(stop)
-                    _raise_if_rate_limited(page)
-                    if _form_ready(page):
-                        log("[*] email form ready via homepage navigation")
-                        return
-                    _try_click_datadome(page, log)
-                    _sleep_with_cancel(2, stop)
+                page.goto(SIGNUP_URL, wait_until="domcontentloaded", timeout=60_000)
             except Exception as exc:
-                log(f"[!] homepage navigation failed: {exc}")
-        if attempt < attempts:
+                log(f"[!] direct /signup goto failed: {exc}")
+            if _wait_for_signup(page, log, stop, 25):
+                log("[*] email form ready on direct /signup load")
+                return
+            last_hint = _challenge_hint(page) or last_hint
             log(f"[!] {last_hint or 'form not ready'} — reload attempt {attempt + 1}/{attempts}")
     if last_hint:
         if headless:
@@ -803,14 +802,9 @@ def _open_signup(page, log, attempts: int = 3, stop=None, headless: bool = False
         log(f"[!] {last_hint} — waiting up to 120s; solve the check in the browser window "
             f"if visible, or configure a residential proxy")
         _try_click_datadome(page, log)
-        deadline = time.time() + 120
-        while time.time() < deadline:
-            _raise_if_cancelled(stop)
-            _raise_if_rate_limited(page)
-            if _form_ready(page):
-                log("[*] challenge passed, email form is ready")
-                return
-            _sleep_with_cancel(2, stop)
+        if _wait_for_signup(page, log, stop, 120):
+            log("[*] challenge passed, email form is ready")
+            return
     raise SignupError(f"email form did not appear ({last_hint or 'no challenge marker'}); "
                       f"IP is blocked by DataDome — use a residential proxy in config")
 
@@ -2251,7 +2245,6 @@ def register_one(
         elif provider != "litensi":
             log("[*] mailbox cleanup: no action needed (mail.cx)")
         # else: form never became ready — no order was ever placed, nothing to settle
-            log("[*] mailbox cleanup: no action needed (mail.cx)")
 
 
 def run_job(
@@ -2282,7 +2275,8 @@ def run_job(
     ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
     out = ACCOUNTS_DIR / f"github_accounts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     ok = fail = 0
-    log(f"[*] github-regkit | engine=Camoufox (Firefox anti-detect) | mail_provider=mail.cx "
+    provider = (getattr(cfg, "mail_provider", "mailcx") or "mailcx").strip().lower()
+    log(f"[*] github-regkit | engine=Camoufox (Firefox anti-detect) | mail_provider={provider} "
         f"| headless={cfg.headless} | target={cfg.register_count} | output={out.name}")
     _emit_progress(ok, fail)  # initial snapshot: 0/0
     try:
