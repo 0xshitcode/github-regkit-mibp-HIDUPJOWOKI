@@ -630,12 +630,17 @@ function ZoneModal({
   onUse,
   onRefresh,
 }) {
-  const zones = (data?.zones || []).slice().sort((a, b) => {
+  const [query, setQuery] = useState("");
+  const allZones = (data?.zones || []).slice().sort((a, b) => {
     const sa = a.stock > 0 ? 0 : 1;
     const sb = b.stock > 0 ? 0 : 1;
     if (sa !== sb) return sa - sb;
     return a.price - b.price;
   });
+  const needle = query.trim().toLowerCase();
+  const zones = needle
+    ? allZones.filter((z) => (z.zone || "").toLowerCase().includes(needle))
+    : allZones;
 
   return (
     <div style={styles.modalBackdrop} onClick={onClose}>
@@ -690,11 +695,20 @@ function ZoneModal({
               </div>
             </div>
           )}
-          {!loading && !error && zones.length === 0 && (
+          {!loading && !error && allZones.length === 0 && (
             <div style={styles.center}>No zones available.</div>
           )}
-          {!loading && !error && zones.length > 0 && (
+          {!loading && !error && allZones.length > 0 && (
             <>
+              <Input
+                autoFocus
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search zone"
+                aria-label="Search zone"
+                style={styles.searchInput}
+              />
               <div style={styles.legend}>
                 <span>
                   Total: <b>{zones.length}</b>
@@ -708,6 +722,11 @@ function ZoneModal({
                   </span>
                 )}
               </div>
+              {zones.length === 0 ? (
+                <div style={styles.center}>
+                  No zones match "{query.trim()}".
+                </div>
+              ) : (
               <div style={styles.tableWrap}>
                 <table style={styles.table}>
                   <thead>
@@ -798,6 +817,7 @@ function ZoneModal({
                   </tbody>
                 </table>
               </div>
+              )}
             </>
           )}
         </div>
@@ -806,7 +826,7 @@ function ZoneModal({
           <button className="glass-btn" onClick={onRefresh} disabled={loading}>
             ⟳ Refresh
           </button>
-          {!loading && !error && zones.length > 0 && (
+          {!loading && !error && allZones.length > 0 && (
             <button
               className="glass-btn primary"
               onClick={() => onUse("")}
@@ -1001,6 +1021,7 @@ const styles = {
     color: "var(--muted)",
     marginBottom: 12,
   },
+  searchInput: { marginBottom: 10 },
   tableWrap: { overflowX: "auto", margin: "0 -4px" },
   table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
   th: {

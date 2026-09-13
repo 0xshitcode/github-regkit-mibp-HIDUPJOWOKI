@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react'
-import { Check, Copy, Download, FileJson, FileText, FolderGit2, KeyRound, Pencil, Plus, ShieldCheck, Trash2, UserMinus, UserPlus } from 'lucide-react'
+import React, { useEffect, useRef, useState } from 'react'
+import { Check, Copy, Download, Ellipsis, FileDown, FileJson, FileSpreadsheet, FileText, FolderGit2, KeyRound, Mail, Merge, Pencil, Play, Plus, ShieldCheck, Square, Trash2, UserMinus, UserPlus } from 'lucide-react'
 import { api, getToken } from '../api.js'
 import { Button, Card, Dialog, EmptyState, Input, Spinner } from './ui.jsx'
 
 const fmtSize = (n) => (n > 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`)
+const fileLabel = (name) => String(name || '').replace('github_accounts_', '').replace('.txt', '')
 
-export default function AccountsPanel({ group = '', onClearGroup, onGroupsChanged }) {
+export default function AccountsPanel({ group = '', onClearGroup, onGroupsChanged, onGotoStatus }) {
   const [files, setFiles] = useState([])
   const [selected, setSelected] = useState(null)
   const [rows, setRows] = useState([])
@@ -13,10 +14,20 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
   const [confirm, setConfirm] = useState(null) // {type:'row'|'file', ...}
   const [rename, setRename] = useState(null) // {name, value} | null
   const [renameBusy, setRenameBusy] = useState(false)
+  const [merge, setMerge] = useState(null) // {source, target} | null
+  const [mergeBusy, setMergeBusy] = useState(false)
   const [assign, setAssign] = useState(null) // {email, groups, memberOf, newName} | null
   const [assignBusy, setAssignBusy] = useState(false)
   const [recovery, setRecovery] = useState(null) // {email, codes} | null
   const [recoveryLoading, setRecoveryLoading] = useState(false)
+  const [resend, setResend] = useState(null) // {email, status, message, code, expired_at} | null
+  const resendTimer = useRef(null)
+  const triggerRefs = useRef({})
+  const menuRef = useRef(null)
+  const [menuEmail, setMenuEmail] = useState(null)
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 })
+  const [exportOpen, setExportOpen] = useState(false)
+  const exportRef = useRef(null)
   // Loading flags only cover user-visible loads, not background polling.
   const [loadingFiles, setLoadingFiles] = useState(true)
   const [loadingRows, setLoadingRows] = useState(false)
@@ -90,6 +101,14 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     } catch {
       notify('Clipboard failed')
     }
+  }
+
+  function copyRow(row) {
+    const line = `${row.email}----${row.password}----${row.username}----${row.totp || ''}`
+    navigator.clipboard.writeText(line).then(
+      () => notify('Row copied'),
+      () => notify('Clipboard failed'),
+    )
   }
 
   function download(content, filename, mime) {
@@ -170,13 +189,14 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     }
   }
 
-  async function copyValue(value, label) {
-    if (!value) return
+  async function copyValue(value) {
+    if (!value) return false
     try {
       await navigator.clipboard.writeText(String(value))
-      notify(`${label} copied`)
+      return true
     } catch {
       notify('Clipboard failed')
+      return false
     }
   }
 
@@ -201,6 +221,129 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
       notify('Clipboard failed')
     }
   }
+
+  function stopResendPoll() {
+    if (resendTimer.current) {
+      clearInterval(resendTimer.current)
+      resendTimer.current = null
+    }
+  }
+
+  // Reorder the Litensi mailbox and poll until a code arrives or the server
+  // stops at its own 2-minute ceiling.
+  async function startResend(email) {
+    stopResendPoll()
+    setResend({ email, status: 'running', message: 'Reordering mailbox', code: '', expired_at: '' })
+    try {
+      await api.post('/api/accounts/resend', { email })
+    } catch (e) {
+      setResend({ email, status: 'error', message: e.message })
+      return
+    }
+    const startedAt = Date.now()
+    resendTimer.current = setInterval(async () => {
+      if (Date.now() - startedAt > 150000) {
+        stopResendPoll()
+        setResend((cur) => cur && cur.email === email && cur.status === 'running'
+          ? { ...cur, status: 'error', message: 'Stopped waiting for a code' }
+          : cur)
+        return
+      }
+      try {
+        const d = await api.get(`/api/accounts/resend-status?email=${encodeURIComponent(email)}`)
+        setResend((cur) => (cur && cur.email === email ? { ...cur, ...d } : cur))
+        if (d.status && d.status !== 'running') stopResendPoll()
+      } catch (e) {
+        stopResendPoll()
+        setResend((cur) => (cur && cur.email === email
+          ? { ...cur, status: 'error', message: e.message }
+          : cur))
+      }
+    }, 2000)
+  }
+
+  async function copyResendCode() {
+    if (!resend?.code) return
+    try {
+      await navigator.clipboard.writeText(resend.code)
+      notify('Code copied')
+    } catch {
+      notify('Clipboard failed')
+    }
+  }
+
+  async function stopResend(email) {
+    stopResendPoll()
+    try {
+      await api.post('/api/accounts/resend-stop', { email })
+    } catch {
+      // server state may already be finished; the local stop still applies
+    }
+    setResend((cur) => (cur && cur.email === email && cur.status === 'running'
+      ? { ...cur, status: 'error', message: 'Resend stopped' }
+      : cur))
+  }
+
+  function openMenu(row) {
+    const wrap = triggerRefs.current[row.email]
+    if (wrap) {
+      const rect = wrap.getBoundingClientRect()
+      const width = 248
+      const items = 3 + (row.totp ? 1 : 0) + (row.has_recovery ? 1 : 0) + (group ? 0 : 1)
+      const height = items * 42 + 14
+      let top = rect.bottom + 6
+      if (top + height > window.innerHeight - 8) top = Math.max(8, rect.top - height - 6)
+      const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8))
+      setMenuPos({ top, left })
+    }
+    setMenuEmail(row.email)
+  }
+
+  function closeMenu(focusTrigger = false) {
+    if (focusTrigger && menuEmail) {
+      triggerRefs.current[menuEmail]?.querySelector('button')?.focus()
+    }
+    setMenuEmail(null)
+  }
+
+  useEffect(() => stopResendPoll, [])
+
+  useEffect(() => {
+    if (!exportOpen) return undefined
+    const onPointerDown = (event) => {
+      if (exportRef.current?.contains(event.target)) return
+      setExportOpen(false)
+    }
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setExportOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [exportOpen])
+
+  useEffect(() => {
+    if (!menuEmail) return undefined
+    const onPointerDown = (event) => {
+      const target = event.target
+      if (menuRef.current?.contains(target)) return
+      if (target.closest?.('[data-menu-trigger]')) return
+      setMenuEmail(null)
+    }
+    const onScrollResize = () => setMenuEmail(null)
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('scroll', onScrollResize, true)
+    window.addEventListener('resize', onScrollResize)
+    menuRef.current?.querySelector('.action-menu-item:not(:disabled)')?.focus()
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('scroll', onScrollResize, true)
+      window.removeEventListener('resize', onScrollResize)
+    }
+  }, [menuEmail])
 
   async function doDeleteFile() {
     const { name } = confirm
@@ -231,6 +374,24 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
       notify(e.message)
     } finally {
       setRenameBusy(false)
+    }
+  }
+
+  async function doMerge() {
+    const { source, target } = merge || {}
+    if (!source || !target || source === target) return
+    setMergeBusy(true)
+    try {
+      const d = await api.post('/api/accounts/merge', { source, target })
+      const skipped = d.skipped ? `, ${d.skipped} duplicate(s) skipped` : ''
+      notify(`Moved ${d.moved} account(s) into ${fileLabel(d.target)}${skipped}`)
+      setMerge(null)
+      setSelected(target)
+      loadFiles()
+    } catch (e) {
+      notify(e.message)
+    } finally {
+      setMergeBusy(false)
     }
   }
 
@@ -302,10 +463,47 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     }
   }
 
+  function renderEmptyState() {
+    const openStatusAction = onGotoStatus ? (
+      <Button variant="primary" size="sm" onClick={onGotoStatus}>
+        <Play size={14} /> Open Status
+      </Button>
+    ) : undefined
+    if (group) {
+      return (
+        <EmptyState
+          icon={FolderGit2}
+          title="This group is empty"
+          description="Add accounts to this group from Registered Accounts, then manage them here."
+        />
+      )
+    }
+    if (files.length === 0) {
+      return (
+        <EmptyState
+          icon={FileText}
+          title="No accounts yet"
+          description="There are no registered accounts in this console yet. Start a registration job, then return here to copy, export, or manage accounts."
+          action={openStatusAction}
+        />
+      )
+    }
+    return (
+      <EmptyState
+        icon={FileText}
+        title="This file is empty"
+        description="The selected account file has no rows. Start a registration job or choose another file."
+        action={openStatusAction}
+      />
+    )
+  }
+
+  const menuRow = menuEmail ? (rows.find((row) => row.email === menuEmail) ?? null) : null
+
   return (
     <div style={styles.wrap}>
       {/* header + file selector */}
-      <Card style={{ padding: 20 }}>
+      <Card className="accounts-head" style={{ padding: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 12 }}>
           <div>
             <div style={{ fontSize: 19, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -335,9 +533,30 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
               </Button>
             )}
             <Button onClick={copyAll} disabled={!rows.length}><Copy size={15} /> Copy All</Button>
-            <Button onClick={exportTxt} disabled={!rows.length}><FileText size={15} /> TXT</Button>
-            <Button onClick={exportCsv} disabled={!rows.length}>CSV</Button>
-            <Button onClick={exportJson} disabled={!rows.length}><FileJson size={15} /> JSON</Button>
+            <span className="export-wrap" ref={exportRef}>
+              <Button
+                onClick={() => setExportOpen((open) => !open)}
+                disabled={!rows.length}
+                aria-haspopup="menu"
+                aria-expanded={exportOpen}
+                title="Export accounts as a file"
+              >
+                <FileDown size={15} /> Export <span className="caret" aria-hidden="true">▾</span>
+              </Button>
+              {exportOpen && (
+                <div className="action-menu action-menu-inline" role="menu" aria-label="Export accounts">
+                  <MenuItem icon={FileText} onClick={() => { setExportOpen(false); exportTxt() }}>
+                    Export TXT
+                  </MenuItem>
+                  <MenuItem icon={FileSpreadsheet} onClick={() => { setExportOpen(false); exportCsv() }}>
+                    Export CSV
+                  </MenuItem>
+                  <MenuItem icon={FileJson} onClick={() => { setExportOpen(false); exportJson() }}>
+                    Export JSON
+                  </MenuItem>
+                </div>
+              )}
+            </span>
             {!group && (
               <>
                 <Button variant="primary" onClick={downloadRaw} disabled={!files.length}><Download size={15} /> Download</Button>
@@ -348,6 +567,18 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                     title="Rename file accounts"
                   >
                     <Pencil size={15} /> Rename
+                  </Button>
+                )}
+                {files.length > 1 && (
+                  <Button
+                    onClick={() => {
+                      const other = files.find((f) => f.name !== currentName)?.name || ''
+                      setMerge({ source: currentName, target: other })
+                    }}
+                    disabled={!currentName}
+                    title="Move all accounts from one file into another"
+                  >
+                    <Merge size={15} /> Merge
                   </Button>
                 )}
                 {files.length > 1 && (
@@ -374,7 +605,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                   variant={active ? 'primary' : 'outline'}
                   onClick={() => setSelected(f.name)}
                 >
-                  {f.name.replace('github_accounts_', '').replace('.txt', '')}
+                  {fileLabel(f.name)}
                   <span style={{ color: 'var(--muted)', marginLeft: 4 }}>{fmtSize(f.size)}</span>
                 </Button>
               )
@@ -394,10 +625,10 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
         ) : rows.length === 0 && (loadingFiles || loadingRows) ? (
           <TableSkeleton />
         ) : rows.length === 0 ? (
-          <EmptyState icon={group ? FolderGit2 : FileText} title={group ? 'This group is empty' : files.length === 0 ? 'No account files yet' : 'This file is empty'} description={group ? 'Add accounts via the "+ Group" button on the Registered Accounts page.' : files.length === 0 ? 'Run a job from the Status page to create account output.' : undefined} />
+          renderEmptyState()
         ) : (
-          <div style={{ overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
-            <table style={styles.table}>
+          <div className="accounts-table-wrap">
+            <table className={group ? 'accounts-table group-view' : 'accounts-table'} style={styles.table}>
               <thead>
                 <tr>
                   <th style={styles.th}>#</th>
@@ -406,45 +637,49 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                   <th style={styles.th}>Username</th>
                   <th style={styles.th}>TOTP Secret</th>
                   {!group && <th style={styles.th}>Group</th>}
-                  <th style={{ ...styles.th, width: 190 }}>Actions</th>
+                  <th style={{ ...styles.th, minWidth: 120 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r, i) => (
                   <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                    <td style={{ ...styles.td, color: 'var(--muted)' }}>{i + 1}</td>
-                    <td style={styles.tdMono}>
+                    <td data-label="#" style={{ ...styles.td, color: 'var(--muted)' }}>{i + 1}</td>
+                    <td data-label="Email" style={styles.tdEmail}>
                       <CopyCell
                         value={r.email}
-                        onCopy={() => copyValue(r.email, 'Email')}
+                        label="Email"
+                        onCopy={() => copyValue(r.email)}
                       />
                     </td>
-                    <td style={styles.tdMono}>
+                    <td data-label="Password" style={{ ...styles.tdMono, color: 'var(--text-secondary)' }}>
                       <CopyCell
                         value={r.password}
                         masked
-                        onCopy={() => copyValue(r.password, 'Password')}
+                        label="Password"
+                        onCopy={() => copyValue(r.password)}
                       />
                     </td>
-                    <td style={styles.tdMono}>
+                    <td data-label="Username" style={{ ...styles.tdMono, color: 'var(--text-secondary)' }}>
                       <CopyCell
                         value={r.username}
-                        onCopy={() => copyValue(r.username, 'Username')}
+                        label="Username"
+                        onCopy={() => copyValue(r.username)}
                       />
                     </td>
-                    <td style={styles.tdMono}>
+                    <td data-label="TOTP Secret" style={{ ...styles.tdMono, color: 'var(--text-secondary)' }}>
                       {r.totp ? (
                         <CopyCell
                           value={r.totp}
                           masked
-                          onCopy={() => copyValue(r.totp, 'TOTP secret')}
+                          label="TOTP secret"
+                          onCopy={() => copyValue(r.totp)}
                         />
                       ) : (
-                        <span style={{ color: 'var(--muted)' }}>-</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>-</span>
                       )}
                     </td>
                     {!group && (
-                      <td style={{ ...styles.td, maxWidth: 220 }}>
+                      <td data-label="Group" style={{ ...styles.td, maxWidth: 220 }}>
                         {r.groups?.length ? (
                           <span style={{ display: 'inline-flex', gap: 5, flexWrap: 'wrap' }}>
                             {r.groups.map((g) => (
@@ -458,65 +693,34 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                             <FolderGit2 size={11} /> {r.group}
                           </button>
                         ) : (
-                          <span style={{ color: 'var(--muted)' }}>-</span>
+                          <span style={{ color: 'var(--text-secondary)' }}>-</span>
                         )}
                       </td>
                     )}
-                    <td style={styles.td}>
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {group ? (
-                          <Button size="sm"
-                            onClick={() => removeFromGroup(r.email)}
-                            title="Remove account from this group"
-                          >
-                            <UserMinus size={13} /> Remove
-                          </Button>
-                        ) : (
-                          <Button size="sm"
-                            onClick={() => openAssign(r.email)}
-                            title="Manage this account's groups (multiple allowed)"
-                          >
-                            <UserPlus size={13} /> Group
-                          </Button>
-                        )}
-                        <Button size="sm"
-                          onClick={() => {
-                            const line = `${r.email}----${r.password}----${r.username}----${r.totp || ''}`
-                            navigator.clipboard.writeText(line).then(
-                              () => notify('Row copied'),
-                              () => notify('Clipboard failed'),
-                            )
-                          }}
-                          title="Copy entire row (email----password----username----totp)"
-                        >
-                          <Copy size={13} /> Copy
-                        </Button>
-                        {r.totp && (
-                          <Button size="sm"
-                            onClick={() => showTotpCode(r.totp, r.email)}
-                            title="Generate the current 2FA code and copy to clipboard"
-                          >
-                            <KeyRound size={13} /> Code
-                          </Button>
-                        )}
-                        {r.has_recovery && (
-                          <Button size="sm"
-                            onClick={() => viewRecoveryCodes(r.email)}
-                            disabled={recoveryLoading}
-                            title="View recovery codes for this account"
-                          >
-                            <ShieldCheck size={13} /> Recovery
-                          </Button>
-                        )}
-                        {!group && (
-                          <Button variant="destructive" size="sm"
-                            onClick={() => setConfirm({ type: 'row', email: r.email, name: currentName })}
-                          >
-                            <Trash2 size={13} /> Delete
-                          </Button>
-                        )}
-                      </div>
-                    </td>
+                    <td data-label="Actions" style={{ ...styles.td, minWidth: 64 }}>
+                      <span
+                        ref={(el) => {
+                          if (el) triggerRefs.current[r.email] = el
+                          else delete triggerRefs.current[r.email]
+                        }}
+                        data-menu-trigger
+                        style={{ display: 'inline-flex' }}
+                      >
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="action-trigger"
+                          aria-label="Account actions"
+                          title="Account actions"
+                          aria-haspopup="menu"
+                          aria-expanded={menuEmail === r.email}
+aria-controls="row-action-menu"
+                  onClick={() => (menuEmail === r.email ? closeMenu() : openMenu(r))}
+                >
+                  <Ellipsis size={16} aria-hidden="true" />
+                </Button>
+              </span>
+            </td>
                   </tr>
                 ))}
               </tbody>
@@ -569,6 +773,64 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>
               Only letters, digits, <code>-</code>, <code>_</code>, and <code>.</code> are allowed.
             </div>
+          </div>
+        )}
+      </Dialog>
+
+      <Dialog
+        open={!!merge}
+        onClose={() => !mergeBusy && setMerge(null)}
+        title="Merge accounts file"
+        footer={
+          <>
+            <Button onClick={() => setMerge(null)} disabled={mergeBusy}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={doMerge}
+              disabled={mergeBusy || !merge?.source || !merge?.target || merge.source === merge.target}
+            >
+              <Merge size={15} /> Merge
+            </Button>
+          </>
+        }
+      >
+        {merge && (
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              Move every account from the source file into the target file. Accounts
+              already present in the target are skipped, and the source file is removed.
+            </div>
+            <label style={{ display: 'grid', gap: 6, fontSize: 12.5, color: 'var(--text-secondary)' }}>
+              Source file (moved out)
+              <select
+                className="ui-input"
+                value={merge.source}
+                onChange={(e) => setMerge({ ...merge, source: e.target.value })}
+                disabled={mergeBusy}
+              >
+                {files.map((f) => (
+                  <option key={f.name} value={f.name}>{fileLabel(f.name)}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: 'grid', gap: 6, fontSize: 12.5, color: 'var(--text-secondary)' }}>
+              Target file (receives accounts)
+              <select
+                className="ui-input"
+                value={merge.target}
+                onChange={(e) => setMerge({ ...merge, target: e.target.value })}
+                disabled={mergeBusy}
+              >
+                {files.map((f) => (
+                  <option key={f.name} value={f.name}>{fileLabel(f.name)}</option>
+                ))}
+              </select>
+            </label>
+            {merge.source === merge.target && (
+              <div style={{ fontSize: 12.5, color: 'var(--danger)' }}>
+                Source and target must be different files.
+              </div>
+            )}
           </div>
         )}
       </Dialog>
@@ -634,6 +896,114 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
         <p className="recovery-warning">Store these safely. Each recovery code can only be used once.</p>
       </Dialog>
 
+      <Dialog
+        open={!!resend}
+        onClose={() => { stopResendPoll(); setResend(null) }}
+        title="Resend verification code"
+        footer={
+          <>
+            <Button onClick={() => { stopResendPoll(); setResend(null) }}>Close</Button>
+            {resend?.status === 'running' && (
+              <Button variant="destructive" onClick={() => stopResend(resend.email)}>
+                <Square size={15} /> Stop
+              </Button>
+            )}
+            {resend?.status === 'done' && resend.code && (
+              <Button variant="primary" onClick={copyResendCode}>
+                <Copy size={15} /> Copy code
+              </Button>
+            )}
+          </>
+        }
+      >
+        {resend && (
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div style={{ fontSize: 13, color: 'var(--muted)', overflowWrap: 'anywhere' }}>
+              Mailbox <strong style={{ color: 'var(--text)' }}>{resend.email}</strong>
+            </div>
+            {resend.status === 'running' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
+                <Spinner />
+                <span>Waiting for a new code. Stops automatically after 2 minutes.</span>
+              </div>
+            )}
+            {resend.status === 'done' && resend.code && (
+              <>
+                <code className="resend-code">{resend.code}</code>
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                  {resend.expired_at ? `Window open until ${resend.expired_at}` : 'Code received'}
+                </div>
+              </>
+            )}
+            {resend.status === 'error' && (
+              <div style={{ fontSize: 13, color: 'var(--danger)', overflowWrap: 'anywhere' }}>
+                {resend.message}
+              </div>
+            )}
+          </div>
+        )}
+      </Dialog>
+
+      {menuRow && (
+        <div
+          ref={menuRef}
+          id="row-action-menu"
+          role="menu"
+          aria-label={`Actions for ${menuRow.email}`}
+          className="action-menu"
+          style={{ top: menuPos.top, left: menuPos.left }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.stopPropagation()
+              closeMenu(true)
+            }
+          }}
+        >
+          {group ? (
+            <MenuItem icon={UserMinus} onClick={() => { closeMenu(); removeFromGroup(menuRow.email) }}>
+              Remove from group
+            </MenuItem>
+          ) : (
+            <MenuItem icon={UserPlus} onClick={() => { closeMenu(); openAssign(menuRow.email) }}>
+              Manage groups
+            </MenuItem>
+          )}
+          <MenuItem icon={Copy} onClick={() => { closeMenu(); copyRow(menuRow) }}>
+            Copy entire row
+          </MenuItem>
+          {menuRow.totp && (
+            <MenuItem icon={KeyRound} onClick={() => { closeMenu(); showTotpCode(menuRow.totp, menuRow.email) }}>
+              Generate 2FA code
+            </MenuItem>
+          )}
+          {menuRow.has_recovery && (
+            <MenuItem
+              icon={ShieldCheck}
+              disabled={recoveryLoading}
+              onClick={() => { closeMenu(); viewRecoveryCodes(menuRow.email) }}
+            >
+              View recovery codes
+            </MenuItem>
+          )}
+          <MenuItem
+            icon={Mail}
+            disabled={resend?.email === menuRow.email && resend.status === 'running'}
+            onClick={() => { closeMenu(); startResend(menuRow.email) }}
+          >
+            Resend mailbox code
+          </MenuItem>
+          {!group && (
+            <MenuItem
+              icon={Trash2}
+              danger
+              onClick={() => { closeMenu(); setConfirm({ type: 'row', email: menuRow.email, name: currentName }) }}
+            >
+              Delete account
+            </MenuItem>
+          )}
+        </div>
+      )}
+
       {toast && <div className="glass toast glass-strong" style={{ padding: '12px 26px', fontSize: 13.5 }}>{toast}</div>}
 
       <style>{accountsCSS}</style>
@@ -647,44 +1017,72 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
  * visibility. Clicking the button always copies the REAL value regardless of
  * mask state, so users don't have to reveal the password to copy it.
  */
-function CopyCell({ value, onCopy, masked = false }) {
+function CopyCell({ value, onCopy, masked = false, label = 'Value' }) {
   const [show, setShow] = useState(!masked)
   const [copied, setCopied] = useState(false)
   const text = String(value ?? '')
   const display = masked && !show ? '•'.repeat(Math.min(12, text.length || 6)) : text
+  const shownLabel = label.toLowerCase()
 
   async function handleCopy(e) {
     e.stopPropagation()
-    if (onCopy) await onCopy()
+    const ok = onCopy ? await onCopy() : false
+    if (!ok) return
     setCopied(true)
     setTimeout(() => setCopied(false), 900)
   }
 
   return (
     <span style={styles.copyCell}>
-      <span
-        style={{
-          ...styles.copyText,
-          cursor: masked ? 'pointer' : 'default',
-          userSelect: masked && !show ? 'none' : 'text',
-        }}
-        onClick={masked ? () => setShow((v) => !v) : undefined}
-        title={masked ? (show ? 'Click to hide' : 'Click to show') : undefined}
-      >
-        {display || <span style={{ color: 'var(--muted)' }}>-</span>}
-      </span>
+      {masked ? (
+        <button
+          type="button"
+          className="copy-toggle"
+          onClick={() => setShow((v) => !v)}
+          aria-pressed={show}
+          aria-label={show ? `Hide ${shownLabel}` : `Show ${shownLabel}`}
+          title={show ? `Hide ${shownLabel}` : `Show ${shownLabel}`}
+        >
+          {display || <span style={{ color: 'var(--text-secondary)' }}>-</span>}
+        </button>
+      ) : (
+        <span
+          style={{
+            ...styles.copyText,
+            cursor: 'default',
+            userSelect: 'text',
+          }}
+          title={text || undefined}
+        >
+          {display || <span style={{ color: 'var(--text-secondary)' }}>-</span>}
+        </span>
+      )}
       {text && (
         <button
           type="button"
           className="copy-btn"
           onClick={handleCopy}
-          title={copied ? 'Copied' : 'Copy to clipboard'}
-          aria-label="Copy"
+          title={copied ? `${label} copied` : `Copy ${shownLabel}`}
+          aria-label={copied ? `${label} copied` : `Copy ${shownLabel}`}
         >
-          {copied ? 'Copied' : 'Copy'}
+          {copied ? <Check size={13} /> : <Copy size={13} />}
         </button>
       )}
     </span>
+  )
+}
+
+function MenuItem({ icon: Icon, danger, children, ...props }) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className={danger ? 'action-menu-item danger' : 'action-menu-item'}
+      {...props}
+    >
+      <Icon size={15} aria-hidden="true" />
+      <span>{children}</span>
+    </button>
   )
 }
 
@@ -693,7 +1091,7 @@ function TableSkeleton() {
   return (
     <div style={styles.skeletonWrap}>
       {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} style={styles.skeletonRow}>
+        <div key={i} className="skeleton-row" style={styles.skeletonRow}>
           <div style={styles.skeletonBarShort} />
           <div style={styles.skeletonBar} />
           <div style={styles.skeletonBar} />
@@ -710,16 +1108,24 @@ const styles = {
   wrap: { display: 'flex', flexDirection: 'column', gap: 14, flex: 1, maxWidth: 1100, width: '100%', margin: '0 auto', minHeight: 0 },
   table: { width: '100%', borderCollapse: 'collapse' },
   th: {
-    textAlign: 'left', padding: '12px 16px', fontSize: 11, fontWeight: 700,
-    letterSpacing: 1, textTransform: 'uppercase', color: 'var(--muted)',
+    textAlign: 'left', padding: '10px 16px', fontSize: 10.5, fontWeight: 700,
+    letterSpacing: 0.8, textTransform: 'uppercase', color: 'var(--text-secondary)',
     borderBottom: '1px solid var(--border)', background: 'var(--bg-card)',
-    position: 'sticky', top: 0, zIndex: 1,
+    position: 'sticky', top: 0, zIndex: 1, whiteSpace: 'nowrap',
   },
-  td: { padding: '11px 16px', fontSize: 13 },
+  td: { padding: '14px 16px', fontSize: 13, verticalAlign: 'middle' },
+  tdEmail: {
+    padding: '14px 16px',
+    fontSize: 13.5,
+    fontWeight: 600,
+    color: 'var(--text-primary)',
+    verticalAlign: 'middle',
+  },
   tdMono: {
-    padding: '11px 16px',
+    padding: '14px 16px',
     fontFamily: "'SF Mono', Menlo, monospace",
     fontSize: 12.5,
+    verticalAlign: 'middle',
   },
   copyCell: {
     display: 'inline-flex',
@@ -780,6 +1186,7 @@ const styles = {
 // injected copy-button CSS (hover/focus styling can't live in inline styles)
 const accountsCSS = `
   .copy-btn {
+    position: relative;
     display: inline-flex; align-items: center; justify-content: center;
     width: 24px; height: 24px; padding: 0; flex-shrink: 0;
     border-radius: 6px; border: 1px solid transparent;
@@ -790,12 +1197,117 @@ const accountsCSS = `
     transition: all 0.15s ease;
     line-height: 1;
   }
+  .copy-btn::after {
+    content: '';
+    position: absolute;
+    inset: -6px;
+  }
   .copy-btn:hover {
     background: rgba(var(--accent-rgb),0.16);
     color: var(--text);
     border-color: rgba(var(--accent-rgb),0.40);
   }
   .copy-btn:active { transform: scale(0.9); }
+  .accounts-table-wrap { overflow: auto; max-height: calc(100vh - 320px); }
+  .accounts-table { width: 100%; border-collapse: collapse; min-width: 940px; }
+  .accounts-table.group-view { min-width: 780px; }
+  .accounts-table tbody tr { transition: background-color 120ms ease; }
+  .accounts-table tbody tr:hover { background: #151C26; }
+  .accounts-table tbody tr:focus-within { background: rgba(var(--accent-rgb), 0.08); }
+  .caret { font-size: 10px; line-height: 1; opacity: 0.75; }
+  .export-wrap { position: relative; display: inline-flex; }
+  .accounts-head { overflow: visible; }
+  .action-trigger {
+    width: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0;
+    justify-content: center;
+    color: var(--text-muted);
+  }
+  .action-trigger[aria-expanded="true"] {
+    background: var(--bg-card-hover);
+    color: var(--text-primary);
+  }
+  .action-trigger:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .action-menu {
+    position: fixed;
+    z-index: 200;
+    width: 248px;
+    padding: 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-card);
+    box-shadow: 0 18px 45px rgba(0, 0, 0, 0.42);
+  }
+  .action-menu-inline {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    left: auto;
+    width: 190px;
+  }
+  .action-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 40px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+  .action-menu-item:hover:not(:disabled) { background: var(--bg-card-hover); color: var(--text-primary); }
+  .action-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .action-menu-item:disabled { opacity: 0.42; cursor: not-allowed; }
+  .action-menu-item svg { flex: none; color: var(--text-muted); }
+  .action-menu-item:hover:not(:disabled) svg { color: var(--accent-text); }
+  .action-menu-item.danger { color: var(--text-muted); }
+  .action-menu-item.danger:hover:not(:disabled),
+  .action-menu-item.danger:focus-visible { background: rgba(var(--danger-rgb), 0.12); color: var(--danger); }
+  .action-menu-item.danger:hover:not(:disabled) svg { color: var(--danger); }
+  .copy-btn:focus-visible,
+  .copy-toggle:focus-visible,
+  .group-badge:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .copy-toggle {
+    display: inline-block;
+    max-width: 240px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+    user-select: text;
+  }
+  .copy-toggle[aria-pressed="false"] { user-select: none; }
+
+  .resend-code {
+    display: block; padding: 14px 16px; text-align: center;
+    border: 1px solid rgba(var(--accent-rgb), 0.40); border-radius: 8px;
+    background: var(--bg-input); color: var(--text-primary);
+    font-family: 'SF Mono', Menlo, monospace; font-size: 26px;
+    font-weight: 700; letter-spacing: 6px;
+  }
 
   /* Keep the loading indicator visible without moving the table layout. */
   .acc-spinner {
@@ -820,5 +1332,63 @@ const accountsCSS = `
     .skeleton-row > :nth-child(4),
     .skeleton-row > :nth-child(5) { display: none; }
     .recovery-codes { grid-template-columns: 1fr !important; }
+  }
+
+  /* responsive: stack account rows as cards without hiding any field */
+  @media (max-width: 760px) {
+    .accounts-table-wrap { overflow: visible; max-height: none; }
+    .accounts-table,
+    .accounts-table.group-view { min-width: 0; }
+    .accounts-table thead { display: none; }
+    .accounts-table tbody { display: grid; gap: 10px; padding: 10px; }
+    .accounts-table tbody tr {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg-card);
+    }
+    .accounts-table tbody td {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+      padding: 0;
+      border: 0;
+      max-width: none;
+    }
+    .accounts-table tbody td::before {
+      content: attr(data-label);
+      flex: none;
+      padding-top: 2px;
+      color: var(--text-secondary);
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .accounts-table tbody td > :last-child {
+      min-width: 0;
+      margin-left: auto;
+      text-align: right;
+    }
+    .accounts-table tbody td[data-label="#"] { display: none; }
+    .accounts-table tbody td[data-label="Email"] {
+      display: grid;
+      gap: 6px;
+      justify-items: start;
+    }
+    .accounts-table tbody td[data-label="Email"]::before { padding-top: 0; }
+    .accounts-table tbody td[data-label="Email"] > :last-child {
+      margin-left: 0;
+      text-align: left;
+      font-size: 14px;
+    }
+    .accounts-table tbody td[data-label="Actions"] { display: block; }
+    .accounts-table tbody td[data-label="Actions"]::before { content: none; }
+    .action-divider { display: none; }
   }
 `

@@ -24,16 +24,21 @@ export function Badge({ tone = 'muted', children, className }) {
 
 export function Dialog({ open, onClose, title, children, footer }) {
   const dialogRef = useRef(null)
+  const onCloseRef = useRef(onClose)
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
 
   useEffect(() => {
     if (!open) return undefined
-    dialogRef.current?.focus()
+    if (document.activeElement === document.body) dialogRef.current?.focus()
     const onKeyDown = (event) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') onCloseRef.current()
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
   return (

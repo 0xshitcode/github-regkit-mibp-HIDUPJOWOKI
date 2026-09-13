@@ -329,6 +329,9 @@ export default function App() {
             setTab("accounts");
             setGroup("");
           }}
+          onGotoStatus={() => {
+            setTab("status");
+          }}
           group={group}
           onClearGroup={() => setGroup("")}
           onGroupsChanged={loadGroups}

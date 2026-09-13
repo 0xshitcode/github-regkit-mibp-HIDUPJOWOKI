@@ -19,7 +19,10 @@ console, or as a Docker service behind an nginx reverse proxy.
 - Optionally sets a profile status and completes profile fields after 2FA.
 - Provides a web console for configuration, job control, live logs, account
   export, TOTP generation, and recovery-code viewing.
-- Organizes accounts into groups.
+- Organizes accounts into groups, merges account files into one, and exports
+  accounts as TXT, CSV, or JSON.
+- Reorders a Litensi mailbox from the console to fetch a fresh code, capped at
+  two minutes with a manual stop.
 - Protects the console with username + password auth (rate-limited,
   server-side sessions) for self-hosting.
 
@@ -159,9 +162,23 @@ Open <http://127.0.0.1:8093>.
 
 - **Status**: start or stop jobs and inspect progress.
 - **Live Log**: review events in real time.
-- **Config**: edit local settings and check Litensi zones / mail.cx domains.
-- **Accounts**: export accounts, copy values, generate TOTP codes, view
-  recovery codes, and organize accounts into groups.
+- **Config**: edit local settings, check Litensi zones (with a zone search),
+  and check mail.cx domains.
+- **Accounts**: copy or export accounts (TXT / CSV / JSON), generate TOTP
+  codes, view recovery codes, resend a Litensi mailbox code, merge one account
+  file into another, and organize accounts into groups. Each row has an actions
+  menu for group, copy, 2FA, recovery, resend, and delete.
+
+### Resend mailbox code
+
+**Accounts → row actions → Resend mailbox code** reorders the same Litensi
+mailbox (`POST /api/mail/reorder`) and polls `getstatus` until a new GitHub
+code arrives or two minutes pass. It stops automatically at the cap, and the
+dialog has a Stop button for an early abort. Reorder needs only the API
+credentials from `config.json` and the email stored in the accounts file, so no
+extra metadata is kept. The provider validates ownership of the email, so an
+address that was not ordered on this Litensi account fails with
+`ACTIVATION DOES NOT EXIST`.
 
 Protect the web console with username + password (like n8n/WAHA) for
 self-hosting/production. Copy `.env.example` to `.env` and fill it in
@@ -211,7 +228,9 @@ All files below persist on the host via bind-mount
 `.datadome-trust.json` (trust cookie — losing it means DataDome 403s from scratch),
 `github_recovery_codes.txt`. Not persistent, which is fine: web login sessions
 (in memory — log in again). For display-less VPS, set `"headless": true` in
-`config.json` (cheaper, slightly easier for DataDome to flag).
+`config.json` (cheaper, slightly easier for DataDome to flag). A DataDome
+challenge cannot be solved without a visible window, so headless runs fail fast
+instead of waiting for a manual click; use a residential proxy for headless.
 
 ### VPS + nginx reverse proxy (one docker network)
 

@@ -119,6 +119,14 @@ _job_state: Dict[str, Any] = {
     "accounts_file": "",
 }
 
+# Resend = reorder the same Litensi mailbox and wait for a fresh code.
+# Hard stop after RESEND_TIMEOUT_SEC with no code so a stale window never
+# hangs a worker thread or the UI forever.
+RESEND_TIMEOUT_SEC = 120
+_resend_lock = threading.Lock()
+_resend_state: Dict[str, Dict[str, Any]] = {}
+_resend_stop: Dict[str, threading.Event] = {}
+
 app = FastAPI(
     title="GitHub Register",
     version="1.0.0",
@@ -752,6 +760,159 @@ async def api_accounts_recovery(
     return {"ok": True, "email": email, "codes": codes}
 
 
+def _find_account_email(email: str) -> Optional[str]:
+    """Return the stored address when it appears in an accounts file.
+
+    Guards the resend endpoint: reordering an address we never registered would
+    burn Litensi balance for nothing and, worse, could reorder someone else's
+    activation if the address were ever valid on the same account.
+    """
+    needle = email.strip().lower()
+    if not needle:
+        return None
+    for f in sorted(ACCOUNTS_DIR.glob("github_accounts_*.txt")):
+        try:
+            lines = f.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            addr = line.split("----", 1)[0].strip()
+            if addr.lower() == needle:
+                return addr
+    return None
+
+
+def _run_resend(key: str, email: str, stop_event: threading.Event) -> None:
+    """Background worker: reorder the mailbox, then poll for a fresh code."""
+
+    def _set(**kwargs: Any) -> None:
+        with _resend_lock:
+            state = _resend_state.get(key)
+            if state is not None:
+                state.update(kwargs)
+
+    try:
+        cfg = load_config(ROOT / "config.json")
+        from github_register.litensi import LitensiClient, LitensiError
+
+        if not (cfg.litensi_api_id and cfg.litensi_api_key and cfg.litensi_site):
+            raise LitensiError(
+                "Litensi is not configured (litensi_api_id / litensi_api_key / litensi_site)"
+            )
+        client = LitensiClient(
+            api_id=cfg.litensi_api_id,
+            api_key=cfg.litensi_api_key,
+            site=cfg.litensi_site,
+            zone=cfg.litensi_zone,
+        )
+        _append_log(f"[*] resend: reordering mailbox {email}")
+        data = client.reorder(email)
+        order_id = str(data.get("order_id") or "")
+        expired_at = str(data.get("expired_at") or "")
+        _set(order_id=order_id, expired_at=expired_at,
+             message="Waiting for a new code")
+        _append_log(f"[*] resend: window for {email} open until {expired_at or '?'} "
+                    f"(order {order_id})")
+        code = client.wait_for_code(
+            order_id, email=email, timeout=RESEND_TIMEOUT_SEC,
+            log=_append_log, cancel_cb=stop_event.is_set,
+        )
+        _set(status="done", code=code, finished_at=time.time(),
+             message=f"Code received: {code}")
+        _append_log(f"[+] resend: new code for {email} = {code}")
+    except Exception as exc:
+        stopped = stop_event.is_set()
+        _set(status="error",
+             message="Resend stopped" if stopped else str(exc),
+             finished_at=time.time())
+        _append_log(f"[!] resend {'stopped' if stopped else 'failed'} for {email}"
+                    + ("" if stopped else f": {exc}"))
+
+
+class ResendBody(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+@app.post("/api/accounts/resend")
+async def api_accounts_resend(
+    body: ResendBody, x_access_key: Optional[str] = Header(None)
+) -> Dict[str, Any]:
+    """Reopen the mailbox window (Litensi reorder) and wait for a new code.
+
+    Runs in a background thread because polling can take up to
+    RESEND_TIMEOUT_SEC; the client watches /api/accounts/resend-status and the
+    live log. Reorder needs no stored metadata: api_id/api_key/site come from
+    config, the email from the accounts file.
+    """
+    _require_auth(x_access_key)
+    email = _find_account_email(body.email)
+    if not email:
+        raise HTTPException(status_code=404, detail="email not found in any accounts file")
+    key = email.strip().lower()
+    with _resend_lock:
+        # drop finished entries after an hour; the map stays tiny
+        cutoff = time.time() - 3600
+        for stale in [k for k, v in _resend_state.items()
+                      if v.get("finished_at") and v["finished_at"] < cutoff]:
+            _resend_state.pop(stale, None)
+            _resend_stop.pop(stale, None)
+        current = _resend_state.get(key)
+        already = bool(current and current.get("status") == "running")
+        if not already:
+            _resend_state[key] = {
+                "email": email,
+                "status": "running",
+                "message": "Reordering mailbox",
+                "code": "",
+                "order_id": "",
+                "expired_at": "",
+                "started_at": time.time(),
+                "finished_at": None,
+            }
+            _resend_stop[key] = threading.Event()
+        stop_event = _resend_stop.get(key)
+    if not already and stop_event is not None:
+        threading.Thread(target=_run_resend, args=(key, email, stop_event), daemon=True).start()
+    return {"ok": True, "started": not already, "email": email,
+            "timeout": RESEND_TIMEOUT_SEC}
+
+
+@app.get("/api/accounts/resend-status")
+async def api_accounts_resend_status(
+    email: str = Query(..., min_length=3, max_length=320),
+    x_access_key: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """Current resend state for one email (idle when none has been started)."""
+    _require_auth(x_access_key)
+    key = email.strip().lower()
+    with _resend_lock:
+        state = _resend_state.get(key)
+        if not state:
+            return {"ok": True, "status": "idle"}
+        return {"ok": True, **state}
+
+
+@app.post("/api/accounts/resend-stop")
+async def api_accounts_resend_stop(
+    body: ResendBody, x_access_key: Optional[str] = Header(None)
+) -> Dict[str, Any]:
+    """Stop a running resend: the worker aborts its poll at the next check."""
+    _require_auth(x_access_key)
+    key = body.email.strip().lower()
+    with _resend_lock:
+        state = _resend_state.get(key)
+        running = bool(state and state.get("status") == "running")
+        event = _resend_stop.get(key)
+        if running and event is not None:
+            event.set()
+    if running:
+        _append_log(f"[!] resend stop requested for {body.email.strip()}")
+    return {"ok": True, "stopped": running}
+
+
 class DeleteRowBody(BaseModel):
     email: str
     name: str  # accounts file name
@@ -825,6 +986,58 @@ async def api_accounts_rename_file(
 
     old_path.replace(new_path)
     return {"ok": True, "renamed": True, "name": new, "old_name": old}
+
+
+class MergeFilesBody(BaseModel):
+    source: str  # accounts file whose rows are moved out
+    target: str  # accounts file that receives the rows
+
+
+@app.post("/api/accounts/merge")
+async def api_accounts_merge_files(
+    body: MergeFilesBody, x_access_key: Optional[str] = Header(None)
+) -> Dict[str, Any]:
+    """Move every row from one accounts file into another, then remove the source.
+
+    Rows whose email already exists in the target are skipped, so merging the
+    same file twice cannot duplicate accounts. Recovery codes and group
+    memberships are keyed by email, so they survive the move untouched.
+    """
+    _require_auth(x_access_key)
+    source = Path(body.source).name
+    target = Path(body.target).name
+    for name in (source, target):
+        if not name.startswith("github_accounts_") or not name.endswith(".txt"):
+            raise HTTPException(status_code=404, detail="file not found")
+    if source == target:
+        raise HTTPException(status_code=400, detail="source and target must be different files")
+    source_path = ACCOUNTS_DIR / source
+    target_path = ACCOUNTS_DIR / target
+    if not source_path.is_file() or not target_path.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+
+    def _email_of(line: str) -> str:
+        return line.split("----", 1)[0].strip().lower()
+
+    source_lines = [l for l in source_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    target_lines = [l for l in target_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    seen = {_email_of(l) for l in target_lines}
+    moved = [l for l in source_lines if _email_of(l) not in seen]
+    skipped = len(source_lines) - len(moved)
+
+    merged = target_lines + moved
+    target_path.write_text(("\n".join(merged) + "\n") if merged else "", encoding="utf-8")
+    source_path.unlink()
+    _append_log(f"[*] merged {source} into {target}: {len(moved)} moved, "
+                f"{skipped} duplicate(s) skipped")
+    return {
+        "ok": True,
+        "moved": len(moved),
+        "skipped": skipped,
+        "total": len(merged),
+        "source": source,
+        "target": target,
+    }
 
 
 # ---------- account groups ----------
