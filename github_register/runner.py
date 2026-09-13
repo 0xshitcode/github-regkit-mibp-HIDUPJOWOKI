@@ -723,7 +723,7 @@ def _form_ready(page) -> bool:
         return False
 
 
-def _open_signup(page, log, attempts: int = 3, stop=None) -> None:
+def _open_signup(page, log, attempts: int = 3, stop=None, headless: bool = False) -> None:
     """Open github.com/signup and fight through DataDome retries/challenge.
 
     Strategy: direct goto first; on DataDome, try the human path
@@ -792,6 +792,13 @@ def _open_signup(page, log, attempts: int = 3, stop=None) -> None:
         if attempt < attempts:
             log(f"[!] {last_hint or 'form not ready'} — reload attempt {attempt + 1}/{attempts}")
     if last_hint:
+        if headless:
+            # no visible window to solve the challenge in — fail fast instead of
+            # burning 120s on a manual-solve window that cannot be seen
+            raise SignupError(
+                f"{last_hint} in headless mode — solve requires a visible browser "
+                f"window; use a residential proxy or set headless=false"
+            )
         # final long wait: challenge may need a manual click in the visible window
         log(f"[!] {last_hint} — waiting up to 120s; solve the check in the browser window "
             f"if visible, or configure a residential proxy")
@@ -2062,7 +2069,7 @@ def _run_signup(
                 # persistent mode: wipe login state, keep DataDome trust cookies
                 _clean_github_session_cookies(context, log)
             page.set_default_timeout(20_000)
-            _open_signup(page, log, stop=stop, attempts=2 if session_attempt > 1 else 3)
+            _open_signup(page, log, stop=stop, attempts=2 if session_attempt > 1 else 3, headless=cfg.headless)
             _reject_blocked(page)
 
             if "email" not in pending:

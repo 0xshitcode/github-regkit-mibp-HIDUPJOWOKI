@@ -19,8 +19,7 @@ console, or as a Docker service behind an nginx reverse proxy.
 - Optionally sets a profile status and completes profile fields after 2FA.
 - Provides a web console for configuration, job control, live logs, account
   export, TOTP generation, and recovery-code viewing.
-- Organizes accounts into groups, and can order a standalone mailbox
-  (Config → Order mailbox) for manual email fill without running signup.
+- Organizes accounts into groups.
 - Protects the console with username + password auth (rate-limited,
   server-side sessions) for self-hosting.
 
@@ -160,8 +159,7 @@ Open <http://127.0.0.1:8093>.
 
 - **Status**: start or stop jobs and inspect progress.
 - **Live Log**: review events in real time.
-- **Config**: edit local settings, check Litensi zones / mail.cx domains,
-  and order a standalone mailbox.
+- **Config**: edit local settings and check Litensi zones / mail.cx domains.
 - **Accounts**: export accounts, copy values, generate TOTP codes, view
   recovery codes, and organize accounts into groups.
 
@@ -205,14 +203,6 @@ docker compose up -d --build
 Open <http://localhost:8093> for a quick local check. (The compose file in
 this repo does not publish ports — production traffic goes through nginx,
 see below; add a `ports:` entry if you need direct local access.)
-
-## Manual Mailbox Order
-
-Config → **Order mailbox** provisions one email address without running
-signup — for manual fills. Mail.cx is free with no order lifecycle; a Litensi
-order stays **open** (balance consumed), so use it within minutes or cancel it
-in the Litensi dashboard. The address is auto-copied to the clipboard.
-Same action via API: `POST /api/mailbox/order` → `{email, order_id, provider}`.
 
 Compose overrides `GITHUB_REGISTER_HOST=0.0.0.0` inside the container.
 All files below persist on the host via bind-mount

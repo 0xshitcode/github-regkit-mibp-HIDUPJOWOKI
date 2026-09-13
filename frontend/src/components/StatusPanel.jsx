@@ -17,14 +17,14 @@ import {
   XCircle,
 } from "lucide-react";
 import { api } from "../api.js";
-import { Badge, Button, Card, Input } from "./ui.jsx";
+import { Badge, Button, Card, Input, Spinner } from "./ui.jsx";
 import LogViewer from "./LogViewer.jsx";
 
 const fmtTime = (ts) =>
-  ts ? new Date(ts * 1000).toLocaleTimeString("en-US", { hour12: false }) : "—";
+  ts ? new Date(ts * 1000).toLocaleTimeString("en-US", { hour12: false }) : "-";
 
 const fmtDuration = (sec) => {
-  if (!Number.isFinite(sec) || sec < 0) return "—";
+  if (!Number.isFinite(sec) || sec < 0) return "-";
   const s = Math.floor(sec);
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -37,6 +37,7 @@ export default function StatusPanel({ onGotoAccounts }) {
   const [state, setState] = useState(null);
   const [count, setCount] = useState(1);
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [now, setNow] = useState(Date.now());
   const timer = useRef(null);
   const tickTimer = useRef(null);
@@ -44,8 +45,11 @@ export default function StatusPanel({ onGotoAccounts }) {
   const refresh = useCallback(() => {
     api
       .get("/api/status")
-      .then(setState)
-      .catch(() => {});
+      .then((data) => {
+        setState(data);
+        setLoadError("");
+      })
+      .catch((error) => setLoadError(error.message || "Status could not be loaded"));
   }, []);
 
   useEffect(() => {
@@ -78,7 +82,7 @@ export default function StatusPanel({ onGotoAccounts }) {
   // status label + tone
   const statusInfo = useMemo(() => {
     if (running)
-      return { label: "Running", tone: "ok", title: "Creating accounts…" };
+      return { label: "Running", tone: "ok", title: "Creating accounts" };
     if (state?.error)
       return { label: "Error", tone: "bad", title: "Job failed" };
     if (state?.finished_at) {
@@ -113,7 +117,7 @@ export default function StatusPanel({ onGotoAccounts }) {
     success,
   ]);
 
-  const progressTone = statusInfo.tone; // 'ok' | 'bad' | 'muted'
+  const progressTone = statusInfo.tone;
 
   async function start() {
     setBusy(true);
@@ -162,14 +166,14 @@ export default function StatusPanel({ onGotoAccounts }) {
         </Badge>
       </Card>
 
-      {/* stats grid — responsive: auto-fit, min 140px per card */}
+      {/* Metrics use a fluid grid so the job summary remains scannable. */}
       <div style={styles.grid}>
         <Stat label="Target" value={target} icon={Target} />
         <Stat label="Success" value={success} tone="ok" icon={CheckCircle2} />
         <Stat label="Failed" value={failed} tone="bad" icon={XCircle} />
         <Stat
           label="Progress"
-          value={target > 0 ? `${done}/${target}` : "—"}
+          value={target > 0 ? `${done}/${target}` : "-"}
           hint={target > 0 ? `${progress}%` : null}
           icon={ListChecks}
         />
@@ -187,7 +191,7 @@ export default function StatusPanel({ onGotoAccounts }) {
         />
       </div>
 
-      {/* progress bar — always visible when a job has been started */}
+      {/* Show progress only after the server has a target. */}
       {target > 0 && (
         <Card style={styles.progressCard}>
           <div style={styles.progressHead}>
@@ -303,7 +307,20 @@ export default function StatusPanel({ onGotoAccounts }) {
         </div>
       </Card>
 
-      {/* live log — merged into this page */}
+      {state === null && !loadError && (
+        <Card className="status-state-card">
+          <Spinner />
+          <span>Loading job status</span>
+        </Card>
+      )}
+      {loadError && (
+        <Card className="status-state-card status-state-error">
+          <strong>Unable to load job status</strong>
+          <span>{loadError}</span>
+          <Button onClick={refresh}>Retry</Button>
+        </Card>
+      )}
+
       <LogViewer />
 
       {/* injected responsive CSS */}
@@ -346,15 +363,12 @@ function Stat({ label, value, tone, small, icon: Icon, hint }) {
 
 // helper: progress bar gradient depending on state
 function progressFillColor(tone, running) {
-  if (tone === "bad") return "linear-gradient(90deg, #EF4444, #DC2626)";
-  if (tone === "muted" && !running)
-    return "linear-gradient(90deg, #39434F, #2A333D)";
-  return "linear-gradient(90deg, var(--accent), var(--accent-2))";
+  if (tone === "bad") return "var(--danger)";
+  if (tone === "muted" && !running) return "var(--border-strong)";
+  return "var(--accent)";
 }
 function progressGlow(tone) {
-  if (tone === "bad") return "0 0 14px rgba(var(--danger-rgb), 0.45)";
-  if (tone === "muted") return "none";
-  return "0 0 14px rgba(var(--accent-rgb), 0.45)";
+  return "none";
 }
 
 const styles = {
@@ -374,7 +388,7 @@ const styles = {
     justifyContent: "space-between",
     flexWrap: "wrap",
     background:
-      "linear-gradient(135deg, rgba(var(--accent-rgb),0.07), transparent 70%)",
+      "var(--bg-card)",
   },
   heroText: { flex: "1 1 260px", minWidth: 0 },
   eyebrow: {
@@ -447,13 +461,13 @@ const styles = {
   },
   progressTrack: {
     height: 10,
-    borderRadius: 99,
+    borderRadius: 4,
     background: "var(--bg-input)",
     overflow: "hidden",
   },
   progressFill: {
     height: "100%",
-    borderRadius: 99,
+    borderRadius: 4,
     transition: "width 0.5s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s",
   },
   progressLegend: {

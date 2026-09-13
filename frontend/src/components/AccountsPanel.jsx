@@ -17,9 +17,10 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
   const [assignBusy, setAssignBusy] = useState(false)
   const [recovery, setRecovery] = useState(null) // {email, codes} | null
   const [recoveryLoading, setRecoveryLoading] = useState(false)
-  // loading flags — only true for user-visible loads, NOT background polling
+  // Loading flags only cover user-visible loads, not background polling.
   const [loadingFiles, setLoadingFiles] = useState(true)
   const [loadingRows, setLoadingRows] = useState(false)
+  const [loadError, setLoadError] = useState('')
 
   function notify(msg) {
     setToast(msg)
@@ -31,8 +32,11 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     if (!silent) setLoadingFiles(true)
     return api
       .get('/api/accounts')
-      .then((d) => setFiles(d.files || []))
-      .catch(() => {})
+      .then((d) => {
+        setFiles(d.files || [])
+        setLoadError('')
+      })
+      .catch((error) => setLoadError(error.message || 'Accounts could not be loaded'))
       .finally(() => setLoadingFiles(false))
   }
 
@@ -51,12 +55,18 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
       : `/api/accounts/preview?name=${encodeURIComponent(name)}`
     api
       .get(url)
-      .then((d) => setRows(d.rows || []))
-      .catch(() => setRows([]))
+      .then((d) => {
+        setRows(d.rows || [])
+        setLoadError('')
+      })
+      .catch((error) => {
+        setRows([])
+        setLoadError(error.message || 'Account preview could not be loaded')
+      })
       .finally(() => setLoadingRows(false))
   }
 
-  // initial file list + background poll every 3s (silent — no spinner flash)
+  // Poll in the background without flashing the loading indicator.
   useEffect(() => {
     loadFiles(false)
     const t = setInterval(() => loadFiles(true), 3000)
@@ -76,9 +86,9 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     const text = rows.map((r) => `${r.email}----${r.password}----${r.username}----${r.totp || ''}`).join('\n')
     try {
       await navigator.clipboard.writeText(text)
-      notify(`✓ ${rows.length} accounts copied to clipboard`)
+      notify(`${rows.length} accounts copied to clipboard`)
     } catch {
-      notify('✗ Clipboard failed')
+      notify('Clipboard failed')
     }
   }
 
@@ -90,7 +100,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     a.download = filename
     a.click()
     URL.revokeObjectURL(url)
-    notify(`✓ Exported ${filename}`)
+    notify(`Exported ${filename}`)
   }
 
   function exportTxt() {
@@ -125,21 +135,21 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
         link.download = name
         link.click()
         URL.revokeObjectURL(u)
-        notify(`✓ Downloaded ${name}`)
+        notify(`Downloaded ${name}`)
       })
-      .catch(() => notify('✗ Download failed'))
+      .catch(() => notify('Download failed'))
   }
 
   async function doDeleteRow() {
     const { email } = confirm
     try {
       await api.del(`/api/accounts/row`, { email, name: currentName })
-      notify(`✓ Account ${email} deleted`)
+      notify(`Account ${email} deleted`)
       setConfirm(null)
       loadRows(currentName)
       loadFiles()
     } catch (e) {
-      notify('✗ ' + e.message)
+      notify(e.message)
     }
   }
 
@@ -150,13 +160,13 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
       if (!code) throw new Error('empty code')
       try {
         await navigator.clipboard.writeText(code)
-        notify(`🔑 ${code} copied (expires in ${d.expires_in}s)`)
+        notify(`${code} copied. Expires in ${d.expires_in}s`)
       } catch {
-        // clipboard denied — still show the code as fallback
-        notify(`🔑 ${email}: ${code} (expires in ${d.expires_in}s)`)
+        // Show the code when clipboard access is denied.
+        notify(`${email}: ${code}. Expires in ${d.expires_in}s`)
       }
     } catch (e) {
-      notify('✗ ' + e.message)
+      notify(e.message)
     }
   }
 
@@ -164,9 +174,9 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     if (!value) return
     try {
       await navigator.clipboard.writeText(String(value))
-      notify(`✓ ${label} copied`)
+      notify(`${label} copied`)
     } catch {
-      notify('✗ Clipboard failed')
+      notify('Clipboard failed')
     }
   }
 
@@ -176,7 +186,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
       const d = await api.get(`/api/accounts/recovery?email=${encodeURIComponent(email)}`)
       setRecovery({ email: d.email, codes: d.codes || [] })
     } catch (e) {
-      notify('✗ ' + e.message)
+      notify(e.message)
     } finally {
       setRecoveryLoading(false)
     }
@@ -186,9 +196,9 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     if (!recovery?.codes?.length) return
     try {
       await navigator.clipboard.writeText(recovery.codes.join('\n'))
-      notify(`✓ ${recovery.codes.length} recovery codes copied`)
+      notify(`${recovery.codes.length} recovery codes copied`)
     } catch {
-      notify('✗ Clipboard failed')
+      notify('Clipboard failed')
     }
   }
 
@@ -196,12 +206,12 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     const { name } = confirm
     try {
       await api.del(`/api/accounts/file?name=${encodeURIComponent(name)}`)
-      notify(`✓ File ${name} deleted`)
+      notify(`File ${name} deleted`)
       setConfirm(null)
       setSelected(null)
       loadFiles()
     } catch (e) {
-      notify('✗ ' + e.message)
+      notify(e.message)
     }
   }
 
@@ -212,13 +222,13 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     setRenameBusy(true)
     try {
       const d = await api.post('/api/accounts/rename', { name, new_name: value })
-      notify(d.renamed ? `✓ File renamed to ${d.name}` : `✓ Name unchanged`)
+      notify(d.renamed ? `File renamed to ${d.name}` : 'Name unchanged')
       const next = d.renamed ? d.name : name
       setRename(null)
       setSelected(next)
       loadFiles()
     } catch (e) {
-      notify('✗ ' + e.message)
+      notify(e.message)
     } finally {
       setRenameBusy(false)
     }
@@ -235,7 +245,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
       setAssign((a) => (a && a.email === email ? { ...a, groups: d.groups || [], memberOf } : a))
     } catch (e) {
       setAssign(null)
-      notify('✗ ' + e.message)
+      notify(e.message)
     }
   }
 
@@ -246,11 +256,11 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
       const d = await api.post('/api/groups/assign', { email: assign.email, group: groupName })
       const memberOf = d.groups || []
       setAssign((a) => (a && a.email === assign.email ? { ...a, memberOf } : a))
-      notify(d.action === 'removed' ? `✓ ${assign.email} removed from ${groupName}` : `✓ ${assign.email} added to ${groupName}`)
+      notify(d.action === 'removed' ? `${assign.email} removed from ${groupName}` : `${assign.email} added to ${groupName}`)
       loadRows(currentName, true)
       onGroupsChanged?.()
     } catch (e) {
-      notify('✗ ' + e.message)
+      notify(e.message)
     } finally {
       setAssignBusy(false)
     }
@@ -263,19 +273,19 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     try {
       await api.post('/api/groups', { name })
     } catch {
-      // exists / invalid — let the assign endpoint confirm
+      // Let the assign endpoint validate existing or invalid names.
     }
     try {
       const d = await api.post('/api/groups/assign', { email: assign.email, group: name })
       const memberOf = d.groups || []
-      // refresh group list so the new group shows with a current count
+      // Refresh counts so the new group is immediately visible.
       const list = await api.get('/api/groups').catch(() => null)
       setAssign((a) => (a && a.email === assign.email ? { ...a, groups: list?.groups || a.groups, memberOf } : a))
-      notify(`✓ ${assign.email} added to ${name}`)
+      notify(`${assign.email} added to ${name}`)
       loadRows(currentName, true)
       onGroupsChanged?.()
     } catch (e) {
-      notify('✗ ' + e.message)
+      notify(e.message)
     } finally {
       setAssignBusy(false)
     }
@@ -284,11 +294,11 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
   async function removeFromGroup(email) {
     try {
       const d = await api.post('/api/groups/assign', { email, group })
-      notify(d.action === 'removed' ? `✓ ${email} removed from ${group}` : `✗ ${email} is not a member of ${group}`)
+      notify(d.action === 'removed' ? `${email} removed from ${group}` : `${email} is not a member of ${group}`)
       loadRows(currentName, true)
       onGroupsChanged?.()
     } catch (e) {
-      notify('✗ ' + e.message)
+      notify(e.message)
     }
   }
 
@@ -312,7 +322,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 3 }}>
               {loadingRows && rows.length === 0
-                ? 'Loading accounts…'
+                ? 'Loading accounts'
                 : group
                   ? <>{rows.length} accounts · across all files</>
                   : <>{rows.length} accounts {currentName && `· ${currentName}`}</>}
@@ -321,7 +331,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {group && (
               <Button onClick={onClearGroup} title="Back to all accounts">
-                ← All Accounts
+                All Accounts
               </Button>
             )}
             <Button onClick={copyAll} disabled={!rows.length}><Copy size={15} /> Copy All</Button>
@@ -375,7 +385,13 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
 
       {/* table */}
       <Card style={{ flex: 1, padding: 0, overflow: 'hidden', minHeight: 200, position: 'relative' }}>
-        {rows.length === 0 && (loadingFiles || loadingRows) ? (
+        {loadError ? (
+          <div className="panel-state panel-state-error">
+            <strong>Unable to load accounts</strong>
+            <span>{loadError}</span>
+            <Button onClick={() => { loadFiles(false); loadRows(currentName, false) }}>Retry</Button>
+          </div>
+        ) : rows.length === 0 && (loadingFiles || loadingRows) ? (
           <TableSkeleton />
         ) : rows.length === 0 ? (
           <EmptyState icon={group ? FolderGit2 : FileText} title={group ? 'This group is empty' : files.length === 0 ? 'No account files yet' : 'This file is empty'} description={group ? 'Add accounts via the "+ Group" button on the Registered Accounts page.' : files.length === 0 ? 'Run a job from the Status page to create account output.' : undefined} />
@@ -424,7 +440,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                           onCopy={() => copyValue(r.totp, 'TOTP secret')}
                         />
                       ) : (
-                        <span style={{ color: 'var(--muted)' }}>—</span>
+                        <span style={{ color: 'var(--muted)' }}>-</span>
                       )}
                     </td>
                     {!group && (
@@ -442,7 +458,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                             <FolderGit2 size={11} /> {r.group}
                           </button>
                         ) : (
-                          <span style={{ color: 'var(--muted)' }}>—</span>
+                          <span style={{ color: 'var(--muted)' }}>-</span>
                         )}
                       </td>
                     )}
@@ -467,8 +483,8 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
                           onClick={() => {
                             const line = `${r.email}----${r.password}----${r.username}----${r.totp || ''}`
                             navigator.clipboard.writeText(line).then(
-                              () => notify('✓ Row copied'),
-                              () => notify('✗ Clipboard failed'),
+                              () => notify('Row copied'),
+                              () => notify('Clipboard failed'),
                             )
                           }}
                           title="Copy entire row (email----password----username----totp)"
@@ -512,7 +528,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
         {loadingRows && rows.length > 0 && (
           <div style={styles.tableRefresh} aria-hidden="true">
             <Spinner />
-            <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--muted)' }}>Loading…</span>
+            <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--muted)' }}>Loading</span>
           </div>
         )}
       </Card>
@@ -572,10 +588,10 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
             </div>
             {assign.groups === null ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' }}>
-                <Spinner /> <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Loading groups…</span>
+                <Spinner /> <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Loading groups</span>
               </div>
             ) : assign.groups.length === 0 ? (
-              <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>No groups yet — create one below.</div>
+              <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>No groups yet. Create one below.</div>
             ) : (
               <div className="group-pick-list">
                 {assign.groups.map((g) => {
@@ -626,7 +642,7 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
 }
 
 /**
- * CopyCell — displays a value with an inline copy button.
+ * CopyCell displays a value with an inline copy button.
  * When `masked` is true the text is dots by default; click text to toggle
  * visibility. Clicking the button always copies the REAL value regardless of
  * mask state, so users don't have to reveal the password to copy it.
@@ -655,7 +671,7 @@ function CopyCell({ value, onCopy, masked = false }) {
         onClick={masked ? () => setShow((v) => !v) : undefined}
         title={masked ? (show ? 'Click to hide' : 'Click to show') : undefined}
       >
-        {display || <span style={{ color: 'var(--muted)' }}>—</span>}
+        {display || <span style={{ color: 'var(--muted)' }}>-</span>}
       </span>
       {text && (
         <button
@@ -665,7 +681,7 @@ function CopyCell({ value, onCopy, masked = false }) {
           title={copied ? 'Copied' : 'Copy to clipboard'}
           aria-label="Copy"
         >
-          {copied ? '✓' : '⧉'}
+          {copied ? 'Copied' : 'Copy'}
         </button>
       )}
     </span>
@@ -696,7 +712,7 @@ const styles = {
   th: {
     textAlign: 'left', padding: '12px 16px', fontSize: 11, fontWeight: 700,
     letterSpacing: 1, textTransform: 'uppercase', color: 'var(--muted)',
-    borderBottom: '1px solid var(--border)', background: 'rgba(23,33,43,0.97)',
+    borderBottom: '1px solid var(--border)', background: 'var(--bg-card)',
     position: 'sticky', top: 0, zIndex: 1,
   },
   td: { padding: '11px 16px', fontSize: 13 },
@@ -721,7 +737,7 @@ const styles = {
   },
   overlay: {
     position: 'fixed', inset: 0, zIndex: 998,
-    background: 'rgba(4,8,13,0.60)', backdropFilter: 'blur(8px)',
+    background: 'rgba(11,15,20,0.72)', backdropFilter: 'blur(8px)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     animation: 'fadeIn 0.2s ease',
   },
@@ -740,7 +756,7 @@ const styles = {
   tableRefresh: {
     position: 'absolute', inset: 0, zIndex: 2,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    background: 'rgba(15,23,32,0.70)', backdropFilter: 'blur(3px)',
+    background: 'rgba(11,15,20,0.78)', backdropFilter: 'blur(3px)',
     animation: 'fadeIn 0.2s ease', pointerEvents: 'none',
   },
   // skeleton first-load layout
@@ -754,7 +770,7 @@ const styles = {
   },
   skeletonBar: {
     height: 14, borderRadius: 6,
-    background: 'linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.10) 37%, rgba(255,255,255,0.04) 63%)',
+    background: 'var(--bg-card-hover)',
     backgroundSize: '400% 100%',
     animation: 'shimmer 1.4s ease infinite',
   },
@@ -781,7 +797,7 @@ const accountsCSS = `
   }
   .copy-btn:active { transform: scale(0.9); }
 
-  /* loading spinner — teal ring */
+  /* Keep the loading indicator visible without moving the table layout. */
   .acc-spinner {
     width: 16px; height: 16px; flex-shrink: 0;
     border-radius: 50%;

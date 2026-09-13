@@ -32,7 +32,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from github_register.config import Config, load_config
-from github_register.mailcx import MailCxClient, MailCxError
+from github_register.mailcx import MailCxClient
 from github_register.runner import load_proxy_pool, run_job, silence_playwright_noise
 
 silence_playwright_noise()  # hide TargetClosedError spam when browsers close
@@ -501,49 +501,6 @@ async def api_litensi_zones(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Unable to contact Litensi: {exc}")
     return {"ok": True, "zones": zones, "site": site, "cheapest": cheapest}
-
-
-class MailboxOrderBody(BaseModel):
-    provider: Optional[str] = None  # override config for this order only
-    domain: Optional[str] = None  # mailcx domain override
-    zone: Optional[str] = None  # litensi zone override
-
-
-@app.post("/api/mailbox/order")
-async def api_mailbox_order(
-    body: MailboxOrderBody, x_access_key: Optional[str] = Header(None)
-) -> Dict[str, Any]:
-    """Order one mailbox on demand (no signup run) — for manual email fill.
-
-    Litensi: order STAYS OPEN (balance consumed); use promptly (minutes) or
-    cancel manually in the dashboard. Mail.cx: free, no order concept.
-    """
-    _require_auth(x_access_key)
-    cfg = load_config(ROOT / "config.json")
-    provider = (body.provider or getattr(cfg, "mail_provider", "mailcx") or "mailcx").strip().lower()
-    if provider not in ("mailcx", "litensi"):
-        raise HTTPException(status_code=400, detail="provider must be mailcx or litensi")
-    try:
-        if provider == "litensi":
-            from github_register.litensi import LitensiClient, LitensiError
-            client = LitensiClient(
-                api_id=cfg.litensi_api_id,
-                api_key=cfg.litensi_api_key,
-                site=cfg.litensi_site,
-                zone=(body.zone or cfg.litensi_zone or ""),
-            )
-        else:
-            client = MailCxClient(domain=(body.domain or cfg.mailcx_domain or ""))
-        email, order_id = client.create_mailbox()
-    except (LitensiError, MailCxError) as exc:
-        raise HTTPException(status_code=502, detail=f"mailbox order failed: {exc}")
-    _append_log(f"[*] manual mailbox order: {email} ({provider}, order={order_id})")
-    note = (
-        "Order stays OPEN in Litensi — use promptly or cancel in the dashboard."
-        if provider == "litensi"
-        else "Mail.cx is free — no order/cancel."
-    )
-    return {"ok": True, "email": email, "order_id": str(order_id), "provider": provider, "note": note}
 
 
 PROXY_SCHEMES = ("http", "https", "socks4", "socks5")

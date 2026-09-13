@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useRef } from 'react'
 
 const cx = (...classes) => classes.filter(Boolean).join(' ')
 
@@ -23,11 +23,23 @@ export function Badge({ tone = 'muted', children, className }) {
 }
 
 export function Dialog({ open, onClose, title, children, footer }) {
+  const dialogRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    dialogRef.current?.focus()
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [open, onClose])
+
   if (!open) return null
   return (
     <div className="ui-dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="ui-dialog" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
-        {title && <header className="ui-dialog-header"><h2>{title}</h2></header>}
+      <section ref={dialogRef} tabIndex="-1" className="ui-dialog" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
+        {title && <header className="ui-dialog-header"><h2>{title}</h2><button type="button" className="ui-dialog-close" onClick={onClose} aria-label="Close dialog">×</button></header>}
         <div className="ui-dialog-body">{children}</div>
         {footer && <footer className="ui-dialog-footer">{footer}</footer>}
       </section>

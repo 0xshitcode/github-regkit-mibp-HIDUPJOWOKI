@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { Search, Save, Mail, Shield, Copy } from "lucide-react";
+import { Search, Save, Mail, Shield } from "lucide-react";
 import { api } from "../api.js";
-import { Button, Card, Input } from "./ui.jsx";
+import { Button, Card, Input, Spinner } from "./ui.jsx";
 
 /* ───────────────────── fields ───────────────────── */
 
@@ -101,7 +101,7 @@ const ADV_FIELDS = [
   {
     key: "fresh_profile",
     label:
-      "Fresh browser per account — incognito-like with cloned DataDome cookie",
+      "Fresh browser per account (incognito-like with cloned DataDome cookie)",
     type: "checkbox",
     group: "Advanced",
     wide: true,
@@ -172,6 +172,7 @@ const GROUP_COLUMN = {
 
 export default function ConfigPanel() {
   const [cfg, setCfg] = useState(null);
+  const [configError, setConfigError] = useState("");
   const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -184,36 +185,14 @@ export default function ConfigPanel() {
   // mailcx domains
   const [mailcxDomains, setMailcxDomains] = useState([]);
 
-  // manual mailbox order (no signup run)
-  const [mailBusy, setMailBusy] = useState(false);
-  const [mailResult, setMailResult] = useState(null);
-  const [mailError, setMailError] = useState("");
-
-  async function orderMailbox() {
-    if (mailBusy) return;
-    setMailBusy(true);
-    setMailError("");
-    setMailResult(null);
-    try {
-      const d = await api.post("/api/mailbox/order", {});
-      setMailResult(d);
-      try {
-        await navigator.clipboard.writeText(d.email);
-      } catch {
-        /* clipboard optional — email stays visible */
-      }
-    } catch (e) {
-      setMailError(e.message || "Order failed");
-    } finally {
-      setMailBusy(false);
-    }
-  }
-
   useEffect(() => {
     api
       .get("/api/config")
-      .then((d) => setCfg(d.config))
-      .catch(() => {});
+      .then((d) => {
+        setCfg(d.config);
+        setConfigError("");
+      })
+      .catch((error) => setConfigError(error.message || "Configuration could not be loaded"));
   }, []);
 
   // fetch mail.cx domains on mount
@@ -224,11 +203,18 @@ export default function ConfigPanel() {
       .catch(() => {});
   }, []);
 
+  if (configError)
+    return (
+      <Card className="panel-state panel-state-error">
+        <strong>Unable to load configuration</strong>
+        <span>{configError}</span>
+        <Button onClick={() => window.location.reload()}>Retry</Button>
+      </Card>
+    );
+
   if (!cfg)
     return (
-      <div style={{ color: "var(--muted)", padding: 20 }}>
-        Loading configuration...
-      </div>
+      <div className="panel-state"><Spinner /> <span>Loading configuration</span></div>
     );
 
   const provider = cfg.mail_provider || "mailcx";
@@ -258,9 +244,9 @@ export default function ConfigPanel() {
       }
       const d = await api.put("/api/config", patch);
       setCfg(d.config);
-      setSaved("✓ Configuration saved");
+      setSaved("Configuration saved");
     } catch (e) {
-      setSaved("✗ " + e.message);
+      setSaved(e.message);
     } finally {
       setBusy(false);
     }
@@ -399,51 +385,6 @@ export default function ConfigPanel() {
               )}
             </div>
 
-            {/* manual order: email ready to fill without running signup */}
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                alignItems: "center",
-                marginTop: 10,
-                flexWrap: "wrap",
-              }}
-            >
-              <Button size="sm" onClick={orderMailbox} disabled={mailBusy}>
-                <Mail size={14} /> {mailBusy ? "Ordering..." : "Order mailbox"}
-              </Button>
-              {mailResult && (
-                <span style={{ fontSize: 13 }}>
-                  <code>{mailResult.email}</code>{" "}
-                  <Button
-                    size="sm"
-                    onClick={() =>
-                      navigator.clipboard
-                        .writeText(mailResult.email)
-                        .catch(() => {})
-                    }
-                  >
-                    <Copy size={13} /> Copy
-                  </Button>
-                </span>
-              )}
-              {mailError && (
-                <span style={{ fontSize: 12, color: "var(--danger)" }}>
-                  ✗ {mailError}
-                </span>
-              )}
-            </div>
-            {mailResult?.note && (
-              <div
-                style={{
-                  fontSize: 12,
-                  color: "var(--muted)",
-                  marginTop: 6,
-                }}
-              >
-                {mailResult.note} (auto-copy ke clipboard)
-              </div>
-            )}
           </Card>
 
           {/* ── Registration card ── */}
@@ -475,7 +416,7 @@ export default function ConfigPanel() {
           <span
             style={{
               fontSize: 13,
-              color: saved.startsWith("✓") ? "var(--ok)" : "var(--danger)",
+              color: saved === "Configuration saved" ? "var(--ok)" : "var(--danger)",
             }}
           >
             {saved}
@@ -529,6 +470,7 @@ function ProxyField({ f, cfg, set }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [poolCount, setPoolCount] = useState(null);
+  const [msgError, setMsgError] = useState(false);
   const mode = cfg.proxy_file ? "file" : "url";
 
   async function onPick(e) {
@@ -537,13 +479,16 @@ function ProxyField({ f, cfg, set }) {
     if (!file) return;
     setBusy(true);
     setMsg("");
+    setMsgError(false);
     try {
       const d = await api.upload("/api/proxy/upload", file);
       set("proxy_file", d.proxy_file);
       setPoolCount(d.count);
-      setMsg(`✓ ${d.count} proxies loaded`);
+      setMsg(`${d.count} proxies loaded`);
+      setMsgError(false);
     } catch (err) {
-      setMsg("✗ " + err.message);
+      setMsg(err.message);
+      setMsgError(true);
     } finally {
       setBusy(false);
     }
@@ -611,7 +556,7 @@ function ProxyField({ f, cfg, set }) {
             <span
               style={{
                 fontSize: 12.5,
-                color: status.startsWith("✗") ? "var(--danger)" : "var(--ok)",
+                color: msgError ? "var(--danger)" : "var(--ok)",
               }}
             >
               {status}
@@ -732,7 +677,7 @@ function ZoneModal({
                   marginBottom: 6,
                 }}
               >
-                ⚠ Failed
+                  Failed
               </div>
               <div
                 style={{
@@ -790,7 +735,7 @@ function ZoneModal({
                           <td style={styles.td}>
                             <div style={styles.zoneCell}>
                               <span style={{ fontWeight: 700 }}>
-                                {z.zone || "—"}
+                                  {z.zone || "-"}
                               </span>
                               {isCurrent && (
                                 <span
@@ -882,7 +827,7 @@ function ZoneModal({
 }
 
 function formatPrice(n) {
-  if (!Number.isFinite(n)) return "—";
+  if (!Number.isFinite(n)) return "-";
   try {
     return new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(
       n,
@@ -916,7 +861,7 @@ const styles = {
     fontWeight: 700,
     letterSpacing: 1.2,
     textTransform: "uppercase",
-    color: "var(--accent)",
+    color: "var(--text-muted)",
     marginBottom: 16,
   },
   fieldsGrid: { display: "grid", gap: "14px 16px" },
@@ -992,7 +937,7 @@ const styles = {
     padding: "2px 6px",
     borderRadius: 4,
     background: "rgba(var(--accent-2-rgb), 0.15)",
-    color: "var(--accent)",
+    color: "var(--accent-2)",
     marginLeft: 4,
   },
   // modal
@@ -1000,7 +945,7 @@ const styles = {
     position: "fixed",
     inset: 0,
     zIndex: 100,
-    background: "rgba(0,0,0,0.55)",
+    background: "rgba(11,15,20,0.72)",
     backdropFilter: "blur(4px)",
     display: "flex",
     alignItems: "center",
@@ -1069,7 +1014,7 @@ const styles = {
     borderBottom: "1px solid var(--glass-border)",
     position: "sticky",
     top: 0,
-    background: "rgba(23,33,43,0.97)",
+    background: "var(--bg-card)",
   },
   td: {
     padding: "10px",

@@ -11,11 +11,11 @@ export function setToken(token) {
 
 let _reloading = false
 function authFailed(url) {
-  // Login/logout endpoints report credential errors themselves — anything
+   // Login/logout endpoints report credential errors themselves. Anything
   // else with 401/403 means the stored token is dead (e.g. server restarted
   // and wiped in-memory sessions): drop it and force a fresh login.
   // No stored token + 401/403 is just the logged-out probe (e.g. the initial
-  // /api/config check) — never reload or the login screen loops forever.
+   // /api/config check) never reload or the login screen loops forever.
   if (url.includes('/api/auth') || url.includes('/api/logout')) return false
   if (!getToken()) return false
   setToken('')
@@ -36,7 +36,7 @@ async function request(method, url, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (resp.status === 401 || resp.status === 403) {
-    if (authFailed(url)) throw new Error('session expired — please log in again')
+    if (authFailed(url)) throw new Error('Session expired. Please log in again.')
     throw new Error('unauthorized')
   }
   const data = await resp.json().catch(() => ({}))
@@ -52,7 +52,7 @@ async function uploadFile(url, file) {
   if (token) headers['X-Access-Key'] = token
   const resp = await fetch(url, { method: 'POST', headers, body: file })
   if (resp.status === 401 || resp.status === 403) {
-    if (authFailed(url)) throw new Error('session expired — please log in again')
+    if (authFailed(url)) throw new Error('Session expired. Please log in again.')
     throw new Error('unauthorized')
   }
   const data = await resp.json().catch(() => ({}))
