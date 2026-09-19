@@ -19,6 +19,8 @@ from typing import Callable, Iterable, Optional
 
 import requests
 
+from .mail_errors import MailboxCancelled, MailboxTimeoutError
+
 API_BASE = "https://mail.cx/v1"
 
 # Default system domains — fetched live from /v1/config on first use
@@ -166,7 +168,7 @@ class MailCxClient:
 
         while time.time() - started < timeout:
             if cancel_cb and cancel_cb():
-                raise MailCxError("cancelled while waiting for mail")
+                raise MailboxCancelled("cancelled while waiting for mail")
 
             messages = self.get_messages(address)
             attempts += 1
@@ -201,7 +203,9 @@ class MailCxClient:
             # Short sleep between polls to respect rate limits
             time.sleep(min(poll_interval, 5))
 
-        raise MailCxError(f"no GitHub code after {timeout}s ({attempts} polls)")
+        # Per-mailbox timeout — NOT a fatal provider error (see mail_errors.py):
+        # fail only this account and keep the batch running.
+        raise MailboxTimeoutError(f"no GitHub code after {timeout}s ({attempts} polls)")
 
     @staticmethod
     def extract_github_code(body: str) -> str:

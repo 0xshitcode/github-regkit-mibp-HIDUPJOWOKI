@@ -102,6 +102,127 @@ def test_parse_public_profile():
         raise AssertionError("invalid profile payload must fail")
 
 
+def test_mailbox_timeout_is_not_fatal_provider_error():
+    """A per-mailbox 'no code' timeout must NOT abort the whole job.
+
+    Fatal provider/config errors (bad key, no balance, out of stock) are
+    LitensiError / MailCxError and DO abort. A single mailbox that never got
+    the GitHub code is a transient per-account failure and must be a separate,
+    non-fatal type.
+    """
+    from github_register.litensi import LitensiError
+    from github_register.mailcx import MailCxError
+    from github_register.mail_errors import MailboxTimeoutError
+
+    # A mailbox timeout must not be classified as a fatal provider error.
+    assert not issubclass(MailboxTimeoutError, LitensiError)
+    assert not issubclass(MailboxTimeoutError, MailCxError)
+
+
+def test_litensi_wait_for_code_raises_mailbox_timeout(monkeypatch=None):
+    """wait_for_code timeout raises MailboxTimeoutError, not LitensiError."""
+    from github_register.litensi import LitensiClient, LitensiError
+    from github_register.mail_errors import MailboxTimeoutError
+
+    cli = LitensiClient("id", "key", "github.com", "zone")
+    # Every poll reports "no message yet" (no code in the payload).
+    cli.get_status = lambda order_id: {"status": "WAITING", "message": ""}
+
+    try:
+        cli.wait_for_code("123", timeout=0, poll_interval=5)
+    except MailboxTimeoutError:
+        pass
+    except LitensiError as exc:  # the bug: a timeout looked like a fatal error
+        raise AssertionError(f"timeout raised fatal LitensiError instead: {exc}")
+    else:
+        raise AssertionError("wait_for_code must raise on timeout")
+
+
+def test_mailcx_wait_for_code_raises_mailbox_timeout():
+    """mail.cx timeout raises MailboxTimeoutError, not MailCxError."""
+    from github_register.mailcx import MailCxClient, MailCxError
+    from github_register.mail_errors import MailboxTimeoutError
+
+    cli = MailCxClient()
+    cli.get_messages = lambda address: []
+
+    try:
+        cli.wait_for_code("a@b.com", timeout=0, poll_interval=5)
+    except MailboxTimeoutError:
+        pass
+    except MailCxError as exc:  # the bug: a timeout looked like a fatal error
+        raise AssertionError(f"timeout raised fatal MailCxError instead: {exc}")
+    else:
+        raise AssertionError("wait_for_code must raise on timeout")
+
+
+def test_register_one_continues_after_mailbox_timeout():
+    """register_one returns None (one failed account) on a mailbox timeout."""
+    from github_register import runner
+    from github_register.mail_errors import MailboxTimeoutError
+
+    cfg = runner.Config(mail_provider="litensi", litensi_api_id="id",
+                        litensi_api_key="key", litensi_site="github.com")
+
+    def _boom(*args, **kwargs):
+        raise MailboxTimeoutError("no GitHub code after 240s")
+
+    orig = runner._run_signup
+    runner._run_signup = _boom
+    try:
+        result = runner.register_one(cfg, log=lambda m: None)
+    finally:
+        runner._run_signup = orig
+    assert result is None, f"mailbox timeout must fail one account, got {result!r}"
+
+
+def test_run_job_continues_after_mailbox_timeout():
+    """run_job keeps going after mailbox timeouts (real register_one path)."""
+    from github_register import runner
+    from github_register.mail_errors import MailboxTimeoutError
+
+    cfg = runner.Config(mail_provider="mailcx", register_count=3, delay_sec=0)
+    calls = {"n": 0}
+
+    def _signup(*args, **kwargs):
+        # Every account times out waiting for the GitHub code.
+        calls["n"] += 1
+        raise MailboxTimeoutError("no GitHub code after 240s")
+
+    orig = runner._run_signup
+    runner._run_signup = _signup
+    try:
+        ok, fail, out = runner.run_job(cfg, log=lambda m: None)
+    finally:
+        runner._run_signup = orig
+        out.unlink(missing_ok=True)
+    # The job must attempt ALL accounts instead of aborting on the first one.
+    assert calls["n"] == 3, f"job stopped early after mailbox timeout (ran {calls['n']}/3)"
+    assert fail == 3 and ok == 0, f"expected 3 fail / 0 ok, got {fail}/{ok}"
+
+
+def test_run_job_aborts_on_fatal_provider_error():
+    """A genuine provider error (bad key / no balance) still aborts the job."""
+    from github_register import runner
+    from github_register.litensi import LitensiError
+
+    cfg = runner.Config(mail_provider="litensi", register_count=3, delay_sec=0)
+    calls = {"n": 0}
+
+    def _one(cfg, log, stop):
+        calls["n"] += 1
+        raise LitensiError("NOT ENOUGH BALANCE — Litensi balance is insufficient")
+
+    orig = runner.register_one
+    runner.register_one = _one
+    try:
+        ok, fail, out = runner.run_job(cfg, log=lambda m: None)
+    finally:
+        runner.register_one = orig
+        out.unlink(missing_ok=True)
+    assert calls["n"] == 1, f"fatal provider error must abort after 1 attempt (ran {calls['n']})"
+
+
 if __name__ == "__main__":
     for name, fn in sorted((n, f) for n, f in globals().items() if n.startswith("test_")):
         fn()

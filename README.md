@@ -287,8 +287,11 @@ Press `Ctrl+C` to stop the CLI or server. A `KeyboardInterrupt` or
 2. Only then order a mailbox with the configured provider (mail.cx is
    implicit and free; Litensi orders a zone, auto-picking the cheapest
    in-stock zone when `litensi_zone` is blank). Ordering late avoids burning
-   balance/expiry while DataDome eats time; a provider failure (empty
-   balance, bad key) aborts the job immediately.
+   balance/expiry while DataDome eats time; a fatal provider failure (empty
+   balance, bad key, out of stock, IP not allowed) aborts the job immediately.
+   A single mailbox that never receives the GitHub code within
+   `otp_timeout_sec` is only a per-account failure — that account is counted
+   as FAIL and the batch continues with the next one.
 2. Open GitHub signup and fill email, password, and a username based on the
    mailbox local part.
 3. Submit the form. If an overlay intercepts pointer clicks, the runner falls

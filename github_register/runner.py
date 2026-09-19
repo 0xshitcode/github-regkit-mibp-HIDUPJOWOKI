@@ -20,6 +20,7 @@ import requests
 
 from .config import Config
 from .litensi import LitensiClient, LitensiError
+from .mail_errors import MailboxCancelled, MailboxTimeoutError
 from .mailcx import MailCxClient, MailCxError
 from .profiles import (
     generate_password,
@@ -2222,6 +2223,17 @@ def register_one(
         raise
     except GitHubRateLimited:
         raise
+    except MailboxCancelled:
+        # Stop was pressed while waiting for the verification email — this is
+        # a clean cancellation, not a provider failure.
+        raise RegistrationCancelled("cancelled while waiting for mail")
+    except MailboxTimeoutError as exc:
+        # ONE mailbox never received the GitHub code in time. This is a
+        # per-account transient failure — fail only this account and let the
+        # batch continue. (Fatal provider errors such as a bad key or an empty
+        # balance are LitensiError/MailCxError and still abort below.)
+        log(f"[-] account failed: mailbox timeout ({exc}); continuing with the next account")
+        return None
     except (MailCxError, LitensiError) as exc:
         # Provider failure (empty balance, bad key, no stock): surface the
         # error and stop — retrying the next account would fail identically.

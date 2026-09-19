@@ -15,6 +15,8 @@ from typing import Callable, Iterable, Optional
 
 import requests
 
+from .mail_errors import MailboxCancelled, MailboxTimeoutError
+
 API_BASE = "https://litensi.id/api/mail"
 PROFILE_BASE = "https://litensi.id/api/profile"
 
@@ -189,7 +191,7 @@ class LitensiClient:
         skip = {str(c).strip() for c in (exclude_codes or ()) if str(c).strip()}
         while time.time() - started < timeout:
             if cancel_cb and cancel_cb():
-                raise LitensiError("cancelled while waiting for mail")
+                raise MailboxCancelled("cancelled while waiting for mail")
             try:
                 data = self.get_status(current_order)
             except Exception as exc:
@@ -247,7 +249,10 @@ class LitensiClient:
                         log(f"[!] reorder failed: {exc} — reorder disabled, "
                             f"will keep polling original order")
             time.sleep(poll_interval)
-        raise LitensiError(f"no GitHub code after {timeout}s")
+        # Per-mailbox timeout — NOT a fatal provider error. One mailbox that
+        # never received the GitHub code must fail only this account; the job
+        # continues with the next one (see github_register.mail_errors).
+        raise MailboxTimeoutError(f"no GitHub code after {timeout}s")
 
     @property
     def last_order_id(self) -> str:
