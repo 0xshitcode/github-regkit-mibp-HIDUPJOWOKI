@@ -19,6 +19,8 @@ console, or as a Docker service behind an nginx reverse proxy.
 - Optionally sets a profile status and completes profile fields after 2FA.
 - Provides a web console for configuration, job control, live logs, account
   export, TOTP generation, and recovery-code viewing.
+- Works on desktop and mobile: the console reflows to a bottom navigation bar
+  and a drawer on phones.
 - Organizes accounts into groups, merges account files into one, and exports
   accounts as TXT, CSV, or JSON.
 - Reorders a Litensi mailbox from the console to fetch a fresh code, capped at
@@ -26,13 +28,14 @@ console, or as a Docker service behind an nginx reverse proxy.
 - Protects the console with username + password auth (rate-limited,
   server-side sessions) for self-hosting.
 
-![Web console screenshot](result.png)
+<img src="result.webp" alt="GitHub Register web console" width="880">
 
 ## Requirements
 
 - Python 3.11 or newer.
 - Node.js 18 or newer, only to rebuild the frontend.
-- A Litensi account with API credentials and a balance.
+- A mailbox provider: mail.cx works out of the box (free, default). For the
+  Litensi provider, a Litensi account with API credentials and a balance.
 - Internet access. A residential proxy may be needed depending on your network.
 
 ## Installation
@@ -169,16 +172,19 @@ Open <http://127.0.0.1:8093>.
   file into another, and organize accounts into groups. Each row has an actions
   menu for group, copy, 2FA, recovery, resend, and delete.
 
+The console is responsive: the sidebar collapses to an icon rail on narrow
+laptops, and on phones it switches to a top bar, a bottom navigation bar, and a
+slide-in drawer, with account rows reflowed into cards.
+
 ### Resend mailbox code
 
 **Accounts → row actions → Resend mailbox code** reorders the same Litensi
-mailbox (`POST /api/mail/reorder`) and polls `getstatus` until a new GitHub
-code arrives or two minutes pass. It stops automatically at the cap, and the
-dialog has a Stop button for an early abort. Reorder needs only the API
-credentials from `config.json` and the email stored in the accounts file, so no
-extra metadata is kept. The provider validates ownership of the email, so an
-address that was not ordered on this Litensi account fails with
-`ACTIVATION DOES NOT EXIST`.
+mailbox and polls its status until a new GitHub code arrives or two minutes
+pass. It stops automatically at the cap, and the dialog has a Stop button for
+an early abort. Reorder needs only the API credentials from `config.json` and
+the email stored in the accounts file, so no extra metadata is kept. The
+provider validates ownership of the email, so an address that was not ordered
+on this Litensi account fails with `ACTIVATION DOES NOT EXIST`.
 
 Protect the web console with username + password (like n8n/WAHA) for
 self-hosting/production. Copy `.env.example` to `.env` and fill it in
@@ -197,13 +203,21 @@ GITHUB_REGISTER_PASSWORD=use-a-strong-password
 ```
 
 Legacy single-password mode still works (`GITHUB_REGISTER_ACCESS_PASSWORD`),
-but username+password is preferred. When auth is enabled, `/docs` swagger
-is disabled and all `/api/*` require login. Login attempts are rate-limited
+but username+password is preferred. When auth is enabled, the API docs page
+is disabled and every API route requires login. Login attempts are rate-limited
 per IP (10 failures/60s → HTTP 429), oversized login bodies are rejected
 (413), credential comparison is timing-safe, security headers are set
 (`nosniff`, `DENY` framing, `no-referrer`, `no-store` on APIs),
-and Sign out invalidates the server-side session via `POST /api/logout`.
+and Sign out invalidates the server-side session.
 The server binds to `127.0.0.1` by default — only bind `0.0.0.0` behind a trusted reverse proxy with HTTPS.
+
+To open the console from another device on the same network (phone, tablet),
+set `GITHUB_REGISTER_HOST=0.0.0.0` in `.env`, restart the server, then browse to
+`http://<your-lan-ip>:8093` from the other device. Always set a strong
+`GITHUB_REGISTER_USERNAME`/`GITHUB_REGISTER_PASSWORD` first: `config.json` holds
+real API keys and proxy credentials, so an unauthenticated `0.0.0.0` bind
+exposes them to everyone on that network. Use this only on a trusted private
+network, never on public Wi-Fi.
 
 ### Docker
 
@@ -292,16 +306,16 @@ Press `Ctrl+C` to stop the CLI or server. A `KeyboardInterrupt` or
    A single mailbox that never receives the GitHub code within
    `otp_timeout_sec` is only a per-account failure — that account is counted
    as FAIL and the batch continues with the next one.
-2. Open GitHub signup and fill email, password, and a username based on the
+3. Open GitHub signup and fill email, password, and a username based on the
    mailbox local part.
-3. Submit the form. If an overlay intercepts pointer clicks, the runner falls
+4. Submit the form. If an overlay intercepts pointer clicks, the runner falls
    back to a DOM click. A disabled form is refreshed and filled with the same
    data before switching browser sessions.
-4. Poll the mailbox and enter the GitHub launch code.
-5. Sign in again if GitHub redirects the new account to login.
-6. Create the first repository when enabled.
-7. Enable TOTP 2FA, capture recovery codes, and persist them per account.
-8. Optionally set profile status, then complete profile name, bio, and location.
+5. Poll the mailbox and enter the GitHub launch code.
+6. Sign in again if GitHub redirects the new account to login.
+7. Create the first repository when enabled.
+8. Enable TOTP 2FA, capture recovery codes, and persist them per account.
+9. Optionally set profile status, then complete profile name, bio, and location.
 
 Post-signup stage failures do not discard an account that was already verified.
 The reason is written to Live Log.
@@ -359,7 +373,7 @@ Its output can contain email addresses, session URLs, and selectors. Treat
 | VPS runs old code | The image is stale — `git pull` then `docker compose up -d --build` on the VPS. |
 | `config.json`/`proxies.txt` became directories | They did not exist before `up`, so docker created folders. `rm -rf` them, create real files (`cp`/`touch`), then `up` again. |
 | VPS IP port 80/443 unreachable | Nothing listening or firewall closed: check `docker ps`, `curl http://127.0.0.1:80` on the host, `ufw status`, and the cloud security group. The app itself exposes no ports — traffic must flow through nginx. |
-| Every `/api/*` returns 403 after redeploy | Stale token: sessions live in server memory and die on restart, while the browser keeps the old token. Reload the page — the UI now detects this and returns to the login screen automatically. Just log in again. |
+| Console returns 403 errors after redeploy | Stale token: sessions live in server memory and die on restart, while the browser keeps the old token. Reload the page — the UI now detects this and returns to the login screen automatically. Just log in again. |
 | DataDome hard block or signup 403 | Change IP/proxy, disable VPN/WARP, then retry after a delay. |
 | Create account or repository will not click | Review Live Log. Native clicks fall back to DOM clicks when an overlay intercepts them. |
 | Web UI does not reflect frontend changes | Run `npm run build`, then restart `python -m web.server`. |
