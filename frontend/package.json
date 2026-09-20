@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:ui": "node verify-ui.cjs",
+    "verify:clicks": "node verify-clicks.cjs"
   },
   "dependencies": {
     "lucide-react": "^1.33.0",
@@ -15,6 +17,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
+    "playwright": "^1.63.0",
     "vite": "^5.4.11"
   }
 }
