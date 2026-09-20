@@ -2,35 +2,68 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#000000" />
     <title>GitHub Register</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <style>
+      /* Tokens mirror DESIGN.md (Resend style reference): void-black canvas,
+         hairline borders for layer separation, one blue action, violet for code. */
       :root {
-        --bg-primary: #0B0F14;
-        --bg-secondary: #0F141B;
-        --bg-card: #111720;
-        --bg-card-hover: #161D27;
-        --bg-input: #0B0F14;
-        --border: #26303D;
-        --border-strong: #6366F1;
-        --text-primary: #F1F5F9;
-        --text-secondary: #94A3B8;
-        --text-muted: #64748B;
-        --text-disabled: #475569;
-        --accent: #6366F1;
-        --accent-rgb: 99, 102, 241;
-        --accent-strong: #818CF8;
-        --accent-text: #A5B4FC;
-        --accent-2: #22D3EE;
-        --accent-2-rgb: 34, 211, 238;
-        --accent-soft: rgba(99, 102, 241, 0.14);
-        --success: #34D399;
-        --success-rgb: 52, 211, 153;
-        --danger: #F87171;
-        --danger-rgb: 248, 113, 113;
-        --warning: #FBBF24;
-        --info: #38BDF8;
+        --color-void-black: #000000;
+        --color-graphite-hairline: #292d30;
+        --color-white: #ffffff;
+        --color-bone-white: #f0f0f0;
+        --color-ash-gray: #a1a4a5;
+        --color-smoke-gray: #abafb4;
+        --color-iron: #6e727a;
+        --color-charcoal: #464a4d;
+        --color-iris-violet: #9281f7;
+        --color-iris-violet-glow: #baa7ff;
+        --color-signal-blue: #3b9eff;
+        --color-sky-blue: #70b8ff;
+        --color-pulse-green: #3ad389;
+        --color-alarm-red: #ff9592;
+        --color-crimson: #ff6465;
+        --color-amber: #ffca16;
 
+        /* Surfaces */
+        --bg-primary: var(--color-void-black);
+        --bg-secondary: var(--color-void-black);
+        --bg-card: var(--color-void-black);
+        --bg-card-hover: #0e1013;
+        --bg-input: #000000;
+        --border: var(--color-graphite-hairline);
+        --border-strong: var(--color-iron);
+
+        /* Text */
+        --text-primary: var(--color-white);
+        --text-secondary: var(--color-bone-white);
+        --text-muted: var(--color-ash-gray);
+        --text-disabled: var(--color-iron);
+
+        /* One blue action, violet reserved for code identifiers */
+        --accent: var(--color-signal-blue);
+        --accent-rgb: 59, 158, 255;
+        --accent-strong: var(--color-sky-blue);
+        --accent-text: var(--color-sky-blue);
+        --accent-soft: rgba(59, 158, 255, 0.14);
+        --code-ident: var(--color-iris-violet);
+
+        /* Data / status only, never UI chrome */
+        --success: var(--color-pulse-green);
+        --success-rgb: 58, 211, 137;
+        --danger: var(--color-alarm-red);
+        --danger-rgb: 255, 149, 146;
+        --danger-strong: var(--color-crimson);
+        --warning: var(--color-amber);
+
+        /* Legacy aliases still referenced by panel inline styles */
         --bg: var(--bg-primary);
         --bg-raise: var(--bg-card);
         --text: var(--text-secondary);
@@ -39,33 +72,66 @@
         --ok: var(--success);
         --ok-rgb: var(--success-rgb);
         --glass-border: var(--border);
-        --glass-highlight: rgba(148, 163, 184, 0.05);
         --glass: var(--bg-card);
         --glass-strong: var(--bg-card-hover);
-        --ring: 0 0 0 3px rgba(99, 102, 241, 0.25);
+        --ring: 0 0 0 3px rgba(59, 158, 255, 0.28);
+
+        /* Two-value radius scale: 6px controls, 16px cards, 24px panels */
+        --radius-control: 6px;
+        --radius-card: 16px;
+        --radius-panel: 24px;
+
+        --font-inter: 'Inter', ui-sans-serif, system-ui, -apple-system,
+          BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo,
+          Monaco, Consolas, monospace;
+
+        --page-max-width: 1200px;
+        --bottom-nav-height: 60px;
       }
+
       * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      html { -webkit-text-size-adjust: 100%; }
+
       html, body, #root { height: 100%; }
+
       body {
         background: var(--bg-primary);
         color: var(--text-secondary);
-        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-family: var(--font-inter);
+        font-size: 16px;
+        line-height: 1.5;
         -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
         overflow: hidden;
       }
+
+      /* Mobile scrolls the document; desktop scrolls inside .app-main. */
       @media (max-width: 820px) {
         body { overflow: auto; }
         html, body, #root { height: auto; min-height: 100%; }
       }
-      ::selection { background: rgba(99, 102, 241, 0.32); }
+
+      ::selection { background: rgba(59, 158, 255, 0.30); }
+
       ::-webkit-scrollbar { width: 8px; height: 8px; }
-      ::-webkit-scrollbar-thumb { background: #26303D; border-radius: 4px; }
-      ::-webkit-scrollbar-thumb:hover { background: #475569; }
+      ::-webkit-scrollbar-thumb { background: var(--color-graphite-hairline); border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: var(--color-iron); }
       ::-webkit-scrollbar-track { background: transparent; }
+
+      code, pre, kbd, samp { font-family: var(--font-mono); }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
     </style>
   </head>
   <body>
-    <div class="ambient"></div>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

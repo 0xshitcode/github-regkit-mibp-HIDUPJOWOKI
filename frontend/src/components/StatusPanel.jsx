@@ -166,30 +166,33 @@ export default function StatusPanel({ onGotoAccounts }) {
         </Badge>
       </Card>
 
-      {/* Metrics use a fluid grid so the job summary remains scannable. */}
-      <div style={styles.grid}>
-        <Stat label="Target" value={target} icon={Target} />
-        <Stat label="Success" value={success} tone="ok" icon={CheckCircle2} />
-        <Stat label="Failed" value={failed} tone="bad" icon={XCircle} />
-        <Stat
-          label="Progress"
-          value={target > 0 ? `${done}/${target}` : "-"}
-          hint={target > 0 ? `${progress}%` : null}
-          icon={ListChecks}
-        />
-        <Stat
-          label="Started"
-          value={fmtTime(state?.started_at)}
-          icon={Play}
-          small
-        />
-        <Stat
-          label={running ? "Elapsed" : "Duration"}
-          value={fmtDuration(elapsedSec)}
-          icon={running ? Clock3 : Square}
-          small
-        />
-      </div>
+      {/* Metrics share one surface with hairline dividers so they read as a
+          single summary, not six separate boxes. */}
+      <Card style={styles.metricsCard}>
+        <div className="status-metrics">
+          <Stat label="Target" value={target} icon={Target} />
+          <Stat label="Success" value={success} tone="ok" icon={CheckCircle2} />
+          <Stat label="Failed" value={failed} tone="bad" icon={XCircle} />
+          <Stat
+            label="Progress"
+            value={target > 0 ? `${done}/${target}` : "-"}
+            hint={target > 0 ? `${progress}%` : null}
+            icon={ListChecks}
+          />
+          <Stat
+            label="Started"
+            value={fmtTime(state?.started_at)}
+            icon={Play}
+            small
+          />
+          <Stat
+            label={running ? "Elapsed" : "Duration"}
+            value={fmtDuration(elapsedSec)}
+            icon={running ? Clock3 : Square}
+            small
+          />
+        </div>
+      </Card>
 
       {/* Show progress only after the server has a target. */}
       {target > 0 && (
@@ -243,21 +246,20 @@ export default function StatusPanel({ onGotoAccounts }) {
         </Card>
       )}
 
-      {/* controls */}
-      <Card style={styles.controls}>
-        <div style={styles.countRow}>
-          <span style={styles.countLabel}>Account count</span>
-          <div style={styles.stepper}>
-            <Button
+      {/* controls: one grouped surface, one clear action area */}
+      <Card className="status-controls">
+        <div className="status-control-block">
+          <span className="status-control-label">Account count</span>
+          <div className="status-stepper">
+            <button
               type="button"
-              size="sm"
-              className="status-stepper-button"
+              className="status-stepper-btn"
               onClick={() => setCount((c) => Math.max(1, c - 1))}
               disabled={running || count <= 1}
               aria-label="Decrease count"
             >
               −
-            </Button>
+            </button>
             <Input
               type="number"
               min="1"
@@ -270,24 +272,23 @@ export default function StatusPanel({ onGotoAccounts }) {
                 )
               }
               disabled={running}
-              style={styles.countInput}
             />
-            <Button
+            <button
               type="button"
-              size="sm"
-              className="status-stepper-button"
+              className="status-stepper-btn"
               onClick={() => setCount((c) => Math.min(1000, c + 1))}
               disabled={running || count >= 1000}
               aria-label="Increase count"
             >
               +
-            </Button>
+            </button>
           </div>
         </div>
-        <div style={styles.buttonRow}>
+
+        <div className="status-actions">
           <Button
             variant="primary"
-            size="lg"
+            className="status-action-primary"
             onClick={start}
             disabled={running || busy}
           >
@@ -295,13 +296,13 @@ export default function StatusPanel({ onGotoAccounts }) {
           </Button>
           <Button
             variant="destructive"
-            size="lg"
+            className="status-action-stop"
             onClick={stop}
             disabled={!running || busy}
           >
             <Square size={15} /> Stop
           </Button>
-          <Button onClick={onGotoAccounts}>
+          <Button className="status-action-nav" onClick={onGotoAccounts}>
             <FileText size={16} /> Accounts
           </Button>
         </div>
@@ -322,9 +323,6 @@ export default function StatusPanel({ onGotoAccounts }) {
       )}
 
       <LogViewer />
-
-      {/* injected responsive CSS */}
-      <style>{responsiveCSS}</style>
     </div>
   );
 }
@@ -337,27 +335,19 @@ function Stat({ label, value, tone, small, icon: Icon, hint }) {
         ? "var(--danger)"
         : "var(--text)";
   return (
-    <Card className="stat-card" style={styles.statCard}>
-      <div style={styles.statHead}>
-        <Icon size={14} style={{ ...styles.statIcon, color }} />
-        <span style={styles.statLabel}>{label}</span>
+    <div className="status-stat">
+      <div className="status-stat-head">
+        <Icon size={14} className="status-stat-icon" style={{ color }} />
+        <span className="status-stat-label">{label}</span>
       </div>
       <div
-        style={{
-          fontSize: small ? 18 : 26,
-          fontWeight: 800,
-          color,
-          letterSpacing: -0.5,
-          lineHeight: 1.15,
-          wordBreak: "break-word",
-          textAlign: "center",
-          width: "100%",
-        }}
+        className={small ? "status-stat-value is-small" : "status-stat-value"}
+        style={{ color }}
       >
         {value}
       </div>
-      {hint && <div style={styles.statHint}>{hint}</div>}
-    </Card>
+      {hint && <div className="status-stat-hint">{hint}</div>}
+    </div>
   );
 }
 
@@ -405,50 +395,8 @@ const styles = {
     lineHeight: 1.2,
     color: "var(--text-primary)",
   },
-  heroDesc: {
-    fontSize: 13,
-    color: "var(--muted)",
-    marginTop: 8,
-    lineHeight: 1.55,
-  },
-  heroBadge: { alignSelf: "flex-start", flexShrink: 0 },
 
-  grid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-    gap: 12,
-  },
-  statCard: {
-    padding: "18px 16px",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    textAlign: "center",
-    gap: 8,
-    minHeight: 100,
-  },
-  statHead: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-  statIcon: { fontSize: 13, opacity: 0.9 },
-  statLabel: {
-    fontSize: 11.5,
-    color: "var(--muted)",
-    fontWeight: 700,
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
-  },
-  statHint: {
-    fontSize: 11.5,
-    color: "var(--muted)",
-    fontWeight: 600,
-    textAlign: "center",
-  },
-
+  metricsCard: { padding: 0, overflow: "hidden" },
   progressCard: { padding: "16px 20px" },
   progressHead: {
     display: "flex",
@@ -483,61 +431,4 @@ const styles = {
     padding: "14px 18px",
     borderColor: "rgba(var(--danger-rgb),0.4)",
   },
-
-  controls: {
-    padding: 18,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: 14,
-  },
-  countRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    flexWrap: "wrap",
-  },
-  countLabel: { fontSize: 13, color: "var(--muted)", fontWeight: 600 },
-  stepper: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    padding: 4,
-    background: "var(--bg-input)",
-    border: "1px solid var(--glass-border)",
-    borderRadius: 14,
-  },
-  stepperBtn: {
-    padding: "6px 12px",
-    fontSize: 16,
-    fontWeight: 700,
-    borderRadius: 10,
-    minWidth: 34,
-  },
-  countInput: { width: 78, textAlign: "center" },
-
-  buttonRow: {
-    display: "flex",
-    gap: 10,
-    flexWrap: "wrap",
-    flex: "1 1 auto",
-    justifyContent: "flex-end",
-  },
-  mainBtn: { padding: "12px 28px", fontSize: 14 },
-  linkBtn: {},
 };
-
-// media queries can't live in inline style; inject once per mount
-const responsiveCSS = `
-  @media (max-width: 640px) {
-    .stat-card {
-      padding: 14px 12px !important;
-      min-height: 88px !important;
-      gap: 6px !important;
-    }
-  }
-  @media (max-width: 520px) {
-    .status-controls-row { flex-direction: column; align-items: stretch !important; }
-  }
-`;

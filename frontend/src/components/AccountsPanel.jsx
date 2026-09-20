@@ -758,7 +758,7 @@ aria-controls="row-action-menu"
               Renaming <strong style={{ color: 'var(--text)' }}>{rename.name}</strong>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontFamily: "'SF Mono', Menlo, monospace", fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>github_accounts_</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>github_accounts_</span>
               <Input
                 autoFocus
                 value={rename.value}
@@ -768,7 +768,7 @@ aria-controls="row-action-menu"
                 disabled={renameBusy}
                 style={{ flex: 1 }}
               />
-              <span style={{ fontFamily: "'SF Mono', Menlo, monospace", fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>.txt</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>.txt</span>
             </div>
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>
               Only letters, digits, <code>-</code>, <code>_</code>, and <code>.</code> are allowed.
@@ -1005,8 +1005,6 @@ aria-controls="row-action-menu"
       )}
 
       {toast && <div className="glass toast glass-strong" style={{ padding: '12px 26px', fontSize: 13.5 }}>{toast}</div>}
-
-      <style>{accountsCSS}</style>
     </div>
   )
 }
@@ -1091,13 +1089,13 @@ function TableSkeleton() {
   return (
     <div style={styles.skeletonWrap}>
       {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} className="skeleton-row" style={styles.skeletonRow}>
-          <div style={styles.skeletonBarShort} />
-          <div style={styles.skeletonBar} />
-          <div style={styles.skeletonBar} />
-          <div style={styles.skeletonBar} />
-          <div style={styles.skeletonBar} />
-          <div style={styles.skeletonBarShort} />
+        <div key={i} className="skeleton-row">
+          <div className="skeleton-bar-short" />
+          <div className="skeleton-bar" />
+          <div className="skeleton-bar" />
+          <div className="skeleton-bar" />
+          <div className="skeleton-bar" />
+          <div className="skeleton-bar-short" />
         </div>
       ))}
     </div>
@@ -1123,7 +1121,7 @@ const styles = {
   },
   tdMono: {
     padding: '14px 16px',
-    fontFamily: "'SF Mono', Menlo, monospace",
+    fontFamily: 'var(--font-mono)',
     fontSize: 12.5,
     verticalAlign: 'middle',
   },
@@ -1141,254 +1139,15 @@ const styles = {
     maxWidth: 240,
     verticalAlign: 'middle',
   },
-  overlay: {
-    position: 'fixed', inset: 0, zIndex: 998,
-    background: 'rgba(11,15,20,0.72)', backdropFilter: 'blur(8px)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    animation: 'fadeIn 0.2s ease',
-  },
-  dialog: { padding: 30, width: 400, animation: 'toastIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)' },
-  recoveryDialog: {
-    padding: 24, width: 'min(460px, calc(100vw - 32px))',
-    animation: 'toastIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)',
-  },
-  recoveryCodes: {
-    display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-    gap: 8, padding: 12, maxHeight: '42vh', overflowY: 'auto',
-    border: '1px solid var(--glass-border)', borderRadius: 12,
-    background: 'var(--bg-input)',
-  },
   // refresh overlay on top of an existing table
   tableRefresh: {
     position: 'absolute', inset: 0, zIndex: 2,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    background: 'rgba(11,15,20,0.78)', backdropFilter: 'blur(3px)',
+    background: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(4px)',
     animation: 'fadeIn 0.2s ease', pointerEvents: 'none',
   },
   // skeleton first-load layout
   skeletonWrap: {
     padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: 10,
   },
-  skeletonRow: {
-    display: 'grid',
-    gridTemplateColumns: '40px 1fr 1fr 1fr 1fr 120px',
-    gap: 12, alignItems: 'center',
-  },
-  skeletonBar: {
-    height: 14, borderRadius: 6,
-    background: 'var(--bg-card-hover)',
-    backgroundSize: '400% 100%',
-    animation: 'shimmer 1.4s ease infinite',
-  },
-  skeletonBarShort: { height: 14, width: 60, borderRadius: 6, background: 'var(--border)' },
 }
-
-// injected copy-button CSS (hover/focus styling can't live in inline styles)
-const accountsCSS = `
-  .copy-btn {
-    position: relative;
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 24px; height: 24px; padding: 0; flex-shrink: 0;
-    border-radius: 6px; border: 1px solid transparent;
-    background: var(--bg-card-hover);
-    color: var(--muted);
-    cursor: pointer;
-    font-size: 12px;
-    transition: all 0.15s ease;
-    line-height: 1;
-  }
-  .copy-btn::after {
-    content: '';
-    position: absolute;
-    inset: -6px;
-  }
-  .copy-btn:hover {
-    background: rgba(var(--accent-rgb),0.16);
-    color: var(--text);
-    border-color: rgba(var(--accent-rgb),0.40);
-  }
-  .copy-btn:active { transform: scale(0.9); }
-  .accounts-table-wrap { overflow: auto; max-height: calc(100vh - 320px); }
-  .accounts-table { width: 100%; border-collapse: collapse; min-width: 940px; }
-  .accounts-table.group-view { min-width: 780px; }
-  .accounts-table tbody tr { transition: background-color 120ms ease; }
-  .accounts-table tbody tr:hover { background: #151C26; }
-  .accounts-table tbody tr:focus-within { background: rgba(var(--accent-rgb), 0.08); }
-  .caret { font-size: 10px; line-height: 1; opacity: 0.75; }
-  .export-wrap { position: relative; display: inline-flex; }
-  .accounts-head { overflow: visible; }
-  .action-trigger {
-    width: 40px;
-    min-width: 40px;
-    min-height: 40px;
-    padding: 0;
-    justify-content: center;
-    color: var(--text-muted);
-  }
-  .action-trigger[aria-expanded="true"] {
-    background: var(--bg-card-hover);
-    color: var(--text-primary);
-  }
-  .action-trigger:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-  .action-menu {
-    position: fixed;
-    z-index: 200;
-    width: 248px;
-    padding: 6px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg-card);
-    box-shadow: 0 18px 45px rgba(0, 0, 0, 0.42);
-  }
-  .action-menu-inline {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    left: auto;
-    width: 190px;
-  }
-  .action-menu-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    min-height: 40px;
-    padding: 8px 10px;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--text-secondary);
-    font: inherit;
-    font-size: 13px;
-    font-weight: 600;
-    text-align: left;
-    cursor: pointer;
-  }
-  .action-menu-item:hover:not(:disabled) { background: var(--bg-card-hover); color: var(--text-primary); }
-  .action-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .action-menu-item:disabled { opacity: 0.42; cursor: not-allowed; }
-  .action-menu-item svg { flex: none; color: var(--text-muted); }
-  .action-menu-item:hover:not(:disabled) svg { color: var(--accent-text); }
-  .action-menu-item.danger { color: var(--text-muted); }
-  .action-menu-item.danger:hover:not(:disabled),
-  .action-menu-item.danger:focus-visible { background: rgba(var(--danger-rgb), 0.12); color: var(--danger); }
-  .action-menu-item.danger:hover:not(:disabled) svg { color: var(--danger); }
-  .copy-btn:focus-visible,
-  .copy-toggle:focus-visible,
-  .group-badge:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
-  .copy-toggle {
-    display: inline-block;
-    max-width: 240px;
-    padding: 0;
-    margin: 0;
-    border: none;
-    background: none;
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    vertical-align: middle;
-    user-select: text;
-  }
-  .copy-toggle[aria-pressed="false"] { user-select: none; }
-
-  .resend-code {
-    display: block; padding: 14px 16px; text-align: center;
-    border: 1px solid rgba(var(--accent-rgb), 0.40); border-radius: 8px;
-    background: var(--bg-input); color: var(--text-primary);
-    font-family: 'SF Mono', Menlo, monospace; font-size: 26px;
-    font-weight: 700; letter-spacing: 6px;
-  }
-
-  /* Keep the loading indicator visible without moving the table layout. */
-  .acc-spinner {
-    width: 16px; height: 16px; flex-shrink: 0;
-    border-radius: 50%;
-    border: 2px solid rgba(var(--accent-rgb),0.25);
-    border-top-color: var(--accent);
-    animation: acc-spin 0.7s linear infinite;
-    display: inline-block;
-  }
-  @keyframes acc-spin { to { transform: rotate(360deg); } }
-
-  /* skeleton shimmer */
-  @keyframes shimmer {
-    0% { background-position: 100% 50%; }
-    100% { background-position: 0 50%; }
-  }
-
-  /* responsive: collapse skeleton columns on narrow screens */
-  @media (max-width: 640px) {
-    .skeleton-row { grid-template-columns: 32px 1fr 1fr 120px !important; }
-    .skeleton-row > :nth-child(4),
-    .skeleton-row > :nth-child(5) { display: none; }
-    .recovery-codes { grid-template-columns: 1fr !important; }
-  }
-
-  /* responsive: stack account rows as cards without hiding any field */
-  @media (max-width: 760px) {
-    .accounts-table-wrap { overflow: visible; max-height: none; }
-    .accounts-table,
-    .accounts-table.group-view { min-width: 0; }
-    .accounts-table thead { display: none; }
-    .accounts-table tbody { display: grid; gap: 10px; padding: 10px; }
-    .accounts-table tbody tr {
-      display: grid;
-      gap: 10px;
-      padding: 12px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--bg-card);
-    }
-    .accounts-table tbody td {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
-      min-width: 0;
-      padding: 0;
-      border: 0;
-      max-width: none;
-    }
-    .accounts-table tbody td::before {
-      content: attr(data-label);
-      flex: none;
-      padding-top: 2px;
-      color: var(--text-secondary);
-      font-size: 10.5px;
-      font-weight: 700;
-      letter-spacing: 0.8px;
-      text-transform: uppercase;
-      white-space: nowrap;
-    }
-    .accounts-table tbody td > :last-child {
-      min-width: 0;
-      margin-left: auto;
-      text-align: right;
-    }
-    .accounts-table tbody td[data-label="#"] { display: none; }
-    .accounts-table tbody td[data-label="Email"] {
-      display: grid;
-      gap: 6px;
-      justify-items: start;
-    }
-    .accounts-table tbody td[data-label="Email"]::before { padding-top: 0; }
-    .accounts-table tbody td[data-label="Email"] > :last-child {
-      margin-left: 0;
-      text-align: left;
-      font-size: 14px;
-    }
-    .accounts-table tbody td[data-label="Actions"] { display: block; }
-    .accounts-table tbody td[data-label="Actions"]::before { content: none; }
-    .action-divider { display: none; }
-  }
-`

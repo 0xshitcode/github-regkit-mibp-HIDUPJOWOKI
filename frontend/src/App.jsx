@@ -6,6 +6,7 @@ import {
   FolderGit2,
   Heart,
   LogOut,
+  Menu,
   Octagon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -40,6 +41,7 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [running, setRunning] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [group, setGroup] = useState("");
   const [groups, setGroups] = useState([]);
   const [groupCreateOpen, setGroupCreateOpen] = useState(false);
@@ -83,7 +85,23 @@ export default function App() {
   function selectGroup(name) {
     setGroup(name);
     setTab("accounts");
+    setDrawerOpen(false);
   }
+
+  // Drawer is a mobile-only surface: close on Escape and when returning to desktop.
+  useEffect(() => {
+    if (!drawerOpen) return undefined;
+    const onKeyDown = (e) => e.key === "Escape" && setDrawerOpen(false);
+    const onResize = () => {
+      if (window.innerWidth > 820) setDrawerOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onResize);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [drawerOpen]);
 
   async function doCreateGroup() {
     const name = newGroupName.trim();
@@ -177,8 +195,38 @@ export default function App() {
   }[tab];
   return (
     <div
-      className={sidebarOpen ? "app-shell" : "app-shell app-shell-collapsed"}
+      className={`${sidebarOpen ? "app-shell" : "app-shell app-shell-collapsed"}${drawerOpen ? " app-drawer-open" : ""}`}
     >
+      {/* Mobile top bar: brand + job status + labeled menu (not a bare hamburger). */}
+      <header className="app-topbar">
+        <div className="app-topbar-brand">
+          <div className="app-brand-icon">
+            <Octagon size={18} />
+          </div>
+          <strong>GitHub Register</strong>
+        </div>
+        <div className="app-topbar-right">
+          <Badge tone={running ? "success" : "muted"}>
+            {running && <span className="pulse-dot" />}
+            {running ? "Running" : "Idle"}
+          </Badge>
+          <Button
+            variant="outline"
+            className="app-menu-btn"
+            onClick={() => setDrawerOpen(true)}
+            aria-label="Open menu"
+            aria-expanded={drawerOpen}
+          >
+            <Menu size={17} />
+            <span>Menu</span>
+          </Button>
+        </div>
+      </header>
+      <div
+        className="app-drawer-scrim"
+        onClick={() => setDrawerOpen(false)}
+        aria-hidden="true"
+      />
       <aside
         className={
           sidebarOpen ? "app-sidebar" : "app-sidebar app-sidebar-collapsed"
@@ -201,6 +249,14 @@ export default function App() {
               </a>
             </div>
           </div>
+          <button
+            type="button"
+            className="app-drawer-close"
+            onClick={() => setDrawerOpen(false)}
+            aria-label="Close menu"
+          >
+            <X size={18} />
+          </button>
           <Button
             variant="ghost"
             size="sm"
@@ -223,6 +279,7 @@ export default function App() {
               className={tab === id ? "app-nav-item active" : "app-nav-item"}
               onClick={() => {
                 setTab(id);
+                setDrawerOpen(false);
                 if (id === "accounts") setGroup("");
               }}
               title={label}
@@ -337,6 +394,29 @@ export default function App() {
           onGroupsChanged={loadGroups}
         />
       </main>
+
+      {/* Mobile bottom nav: the three primary destinations, one thumb away. */}
+      <nav className="app-bottomnav" aria-label="Primary">
+        {NAV.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            type="button"
+            className={
+              tab === id
+                ? "app-bottomnav-item active"
+                : "app-bottomnav-item"
+            }
+            onClick={() => {
+              setTab(id);
+              if (id === "accounts") setGroup("");
+            }}
+            aria-current={tab === id ? "page" : undefined}
+          >
+            <Icon size={19} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
 
       <Dialog
         open={groupCreateOpen}

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Search, Save, Mail, Shield } from "lucide-react";
+import { Search, Save, Mail, Shield, X, RefreshCw } from "lucide-react";
 import { api } from "../api.js";
 import { Button, Card, Input, Spinner } from "./ui.jsx";
 
@@ -407,7 +407,7 @@ export default function ConfigPanel() {
         </div>
       </div>
 
-      <Card style={styles.saveBar}>
+      <Card style={styles.saveBar} className="cfg-savebar">
         <Button variant="primary" size="lg" onClick={save} disabled={busy}>
           <Save size={16} />
           {busy ? "Saving..." : "Save configuration"}
@@ -585,13 +585,15 @@ function Field({ f, value, onChange, onCheckZones }) {
           flexDirection: "row",
           alignItems: "center",
           gap: 10,
+          minHeight: 44,
+          cursor: "pointer",
         }}
       >
         <Input
           type="checkbox"
           checked={!!value}
           onChange={(e) => onChange(e.target.checked)}
-          style={{ width: 16, height: 16, accentColor: "var(--accent)" }}
+          style={{ width: 18, height: 18, flex: "none", accentColor: "var(--accent)" }}
         />
         <span style={{ fontSize: 13, color: "var(--text)" }}>{f.label}</span>
       </label>
@@ -666,8 +668,9 @@ function ZoneModal({
             className="glass-btn"
             onClick={onClose}
             style={{ padding: "6px 12px" }}
+            aria-label="Close zone list"
           >
-            ✕
+            <X size={15} />
           </button>
         </div>
 
@@ -824,7 +827,7 @@ function ZoneModal({
 
         <div style={styles.modalFoot}>
           <button className="glass-btn" onClick={onRefresh} disabled={loading}>
-            ⟳ Refresh
+            <RefreshCw size={15} /> Refresh
           </button>
           {!loading && !error && allZones.length > 0 && (
             <button
@@ -841,7 +844,6 @@ function ZoneModal({
           </button>
         </div>
       </div>
-      <style>{modalCSS}</style>
     </div>
   );
 }
@@ -933,31 +935,32 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: 8,
+    minHeight: 44,
     padding: "10px 16px",
-    borderRadius: 10,
+    borderRadius: "var(--radius-control)",
     cursor: "pointer",
     border: "1px solid var(--border)",
-    background: "var(--bg-input)",
-    transition: "all 0.15s ease",
+    background: "transparent",
+    transition: "border-color 150ms ease-out, color 150ms ease-out",
     fontSize: 13.5,
   },
-  radio: { accentColor: "var(--accent)", width: 16, height: 16 },
+  radio: { accentColor: "var(--accent)", width: 18, height: 18, flex: "none" },
   badge: {
-    fontSize: 9.5,
-    fontWeight: 700,
-    padding: "2px 6px",
-    borderRadius: 4,
-    background: "rgba(var(--ok-rgb), 0.15)",
-    color: "var(--ok)",
+    fontSize: 10,
+    fontWeight: 600,
+    padding: "2px 7px",
+    borderRadius: "var(--radius-control)",
+    border: "1px solid rgba(var(--success-rgb), 0.35)",
+    color: "var(--success)",
     marginLeft: 4,
   },
   badgePaid: {
-    fontSize: 9.5,
-    fontWeight: 700,
-    padding: "2px 6px",
-    borderRadius: 4,
-    background: "rgba(var(--accent-2-rgb), 0.15)",
-    color: "var(--accent-2)",
+    fontSize: 10,
+    fontWeight: 600,
+    padding: "2px 7px",
+    borderRadius: "var(--radius-control)",
+    border: "1px solid rgba(var(--accent-rgb), 0.35)",
+    color: "var(--accent-text)",
     marginLeft: 4,
   },
   // modal
@@ -965,13 +968,13 @@ const styles = {
     position: "fixed",
     inset: 0,
     zIndex: 100,
-    background: "rgba(11,15,20,0.72)",
-    backdropFilter: "blur(4px)",
+    background: "rgba(0,0,0,0.72)",
+    backdropFilter: "blur(12px)",
+    WebkitBackdropFilter: "blur(12px)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     padding: 16,
-    animation: "fadeIn 0.2s ease",
   },
   modal: {
     width: "100%",
@@ -1047,8 +1050,8 @@ const styles = {
 };
 
 const layoutCSS = `
+  /* Inline base is a single column; widen only where two columns fit. */
   @media (min-width: 1024px) { .cfg-columns { grid-template-columns: 1fr 1fr !important; } }
-  @media (max-width: 1023px) { .cfg-columns { grid-template-columns: 1fr !important; } }
   @media (min-width: 560px) {
     .cfg-fields { grid-template-columns: 1fr 1fr; }
     .cfg-field-half { grid-column: span 1; }
@@ -1058,9 +1061,9 @@ const layoutCSS = `
     .cfg-fields { grid-template-columns: 1fr; }
     .cfg-field-half, .cfg-field-wide { grid-column: 1 / -1; }
   }
+  /* Keep the sticky save bar clear of the mobile bottom nav. */
+  @media (max-width: 820px) {
+    .cfg-savebar { bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom)) !important; }
+  }
 `;
 
-const modalCSS = `
-  @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
-  @media (max-width: 520px) { .glass-btn { font-size: 12px; } }
-`;
