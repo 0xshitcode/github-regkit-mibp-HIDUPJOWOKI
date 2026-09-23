@@ -17,6 +17,10 @@ class Config:
     nextproxy_country: str = ""  # e.g. "US","DE","SG" (empty = any)
     nextproxy_limit: int = 20
     nextproxy_max_latency: int = 0  # ms, 0 = off
+    # Pin known nodes: whitelist (full URLs) is tried BEFORE sweeping the
+    # pool; blacklist (host:port) is skipped without probing. CSV.
+    nextproxy_whitelist: str = ""  # e.g. "http://1.2.3.4:8888,http://5.6.7.8:10111"
+    nextproxy_blacklist: str = ""  # e.g. "2.59.132.39:3128,207.154.201.220:3128"
     # Direct connections are FORBIDDEN: without a working pool node the run
     # fails instead of leaking the real exit IP (which gets flagged + burned).
     proxy_required: bool = True

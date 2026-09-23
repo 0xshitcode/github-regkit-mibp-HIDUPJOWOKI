@@ -474,3 +474,26 @@ def test_generic_launch_failure_with_proxy_marker_retries(monkeypatch):
     # initial + 2 IP-retries, then gives up (None) instead of instant FAIL
     assert calls["n"] == 3, f"expected 3 attempts, ran {calls['n']}x"
     assert result is None
+
+
+def test_whitelist_blacklist_parsing():
+    from github_register.nextproxy import _parse_csv_list, _hostport
+
+    assert _parse_csv_list("http://a:1, b:2 ;c:3") == ["http://a:1", "b:2", "c:3"]
+    assert _hostport("http://1.2.3.4:8888") == "1.2.3.4:8888"
+    assert _hostport("2.59.132.39:3128") == "2.59.132.39:3128"
+
+
+def test_fetch_excludes_blacklist(monkeypatch):
+    from github_register import nextproxy as nx
+
+    nodes = [
+        {"ip": "1.1.1.1", "port": "8080", "protocol": "https"},
+        {"ip": "2.59.132.39", "port": "3128", "protocol": "https"},
+    ]
+    monkeypatch.setattr(nx.NextProxyClient, "_get", lambda self, p, q: {"proxies": nodes})
+    c = nx.NextProxyClient()
+    got = c.fetch(limit=10, proxy_type="https", blacklist="2.59.132.39:3128")
+    assert [n["ip"] for n in got] == ["1.1.1.1"]
+    got2 = c.fetch(limit=10, proxy_type="https")
+    assert len(got2) == 2

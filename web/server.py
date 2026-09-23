@@ -320,6 +320,8 @@ class ConfigBody(BaseModel):
     proxy_rate_limit_retries: Optional[int] = None
     proxy_retry_attempts: Optional[int] = None
     proxy_required: Optional[bool] = None
+    nextproxy_whitelist: Optional[str] = None
+    nextproxy_blacklist: Optional[str] = None
     create_repo: Optional[bool] = None
     repo_name: Optional[str] = None
     enable_2fa: Optional[bool] = None
@@ -498,6 +500,7 @@ async def api_nextproxy_pool(
             limit=body.nextproxy_limit or getattr(cfg, "nextproxy_limit", 20) or 20,
             proxy_type=body.nextproxy_type or getattr(cfg, "nextproxy_type", "socks5") or "socks5",
             country=body.nextproxy_country or getattr(cfg, "nextproxy_country", "") or "",
+            blacklist=getattr(cfg, "nextproxy_blacklist", "") or "",
             max_latency=body.nextproxy_max_latency
             if body.nextproxy_max_latency is not None
             else getattr(cfg, "nextproxy_max_latency", 0) or 0,

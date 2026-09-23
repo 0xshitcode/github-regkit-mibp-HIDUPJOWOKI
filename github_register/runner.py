@@ -190,6 +190,8 @@ def _pick_nextproxy_url(cfg: Config, log=None) -> str:
             proxy_type=(getattr(cfg, "nextproxy_type", "socks5") or "socks5"),
             country=(getattr(cfg, "nextproxy_country", "") or ""),
             max_latency=int(getattr(cfg, "nextproxy_max_latency", 0) or 0),
+            whitelist=(getattr(cfg, "nextproxy_whitelist", "") or ""),
+            blacklist=(getattr(cfg, "nextproxy_blacklist", "") or ""),
             # required mode probes the WHOLE pool, not just the first 5:
             # a single usable node anywhere must be found before failing.
             max_probes=limit if required else 5,

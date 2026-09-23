@@ -34,6 +34,27 @@ class NextProxyError(RuntimeError):
 _DIRECT_IP: Optional[str] = None
 
 
+def _parse_csv_list(raw: str) -> list[str]:
+    """Split a CSV config value into stripped non-empty items."""
+    return [p.strip() for p in (raw or "").replace(";", ",").split(",") if p.strip()]
+
+
+def _hostport(url_or_host: str) -> str:
+    """Normalize 'http://ip:port' or 'ip:port' to 'ip:port' (lowercase)."""
+    from urllib.parse import urlsplit
+
+    s = url_or_host.strip()
+    if "://" not in s:
+        s = "http://" + s
+    try:
+        p = urlsplit(s)
+        if p.hostname and p.port:
+            return f"{p.hostname.lower()}:{p.port}"
+    except Exception:
+        pass
+    return s.lower()
+
+
 def direct_exit_ip(timeout: float = 8.0) -> Optional[str]:
     """This host's real exit IP (bare lookup, no proxy) — cached per process.
 
@@ -109,6 +130,7 @@ class NextProxyClient:
         max_latency: int = 0,
         sort: str = "",
         allow_transparent: bool = False,
+        blacklist: str = "",
     ) -> list[dict]:
         """Raw node dicts, unmasked+unlocked only, sorted fastest-first.
 
@@ -128,11 +150,13 @@ class NextProxyClient:
             params["sort"] = sort
         data = self._get("/api/proxies", params)
         nodes = data.get("proxies") or []
+        blocked = {_hostport(b) for b in _parse_csv_list(blacklist)}
         usable = [
             n for n in nodes
             if isinstance(n, dict) and not n.get("masked") and not n.get("isLocked") and n.get("ip") and n.get("port")
             and "•" not in str(n.get("ip", "")) and "•" not in str(n.get("port", ""))
             and (allow_transparent or str(n.get("anonymity") or "").lower() != "transparent")
+            and f"{str(n['ip']).lower()}:{n['port']}" not in blocked
         ]
         usable.sort(key=lambda n: float(n.get("latency") or n.get("rawLatency") or 9e9))
         return usable
@@ -165,7 +189,8 @@ class NextProxyClient:
         return [self.to_url(n) for n in self.fetch(limit=limit, proxy_type=proxy_type, **kw)]
 
     def pick_fast(self, limit: int = 20, proxy_type: str = "socks5",
-                  max_probes: int = 5, timeout: float = 5.0, **kw) -> str:
+                  max_probes: int = 5, timeout: float = 5.0,
+                  whitelist: str = "", **kw) -> str:
         """First genuinely-working URL from the pool (already latency-sorted).
 
         TCP connect alone is not enough — transparent/filtering proxies accept
@@ -204,12 +229,30 @@ class NextProxyClient:
             return ""
 
         cands = self.fetch_urls(limit=limit, proxy_type=proxy_type, **kw)[: max(1, max_probes)]
-        with _fut.ThreadPoolExecutor(max_workers=min(len(cands), max_probes)) as ex:
-            # dict preserves submission order: first URL in pool order that works wins
+        # Pinned nodes first: a whitelisted node that passes the traffic
+        # check wins immediately — no pool sweep, no 35s wait. Two phases so
+        # a live whitelist resolves in seconds.
+        pinned = []
+        for item in _parse_csv_list(whitelist):
+            item = item.strip()
+            if "://" not in item:
+                item = "http://" + item
+            if item not in cands and item not in pinned:
+                pinned.append(item)
+        if pinned:
+            with _fut.ThreadPoolExecutor(max_workers=len(pinned)) as ex:
+                for url, ok in zip(pinned, ex.map(_check, pinned)):
+                    if ok:
+                        return ok
+        if not cands:
+            return ""
+        with _fut.ThreadPoolExecutor(max_workers=min(len(cands), max_probes) or 1) as ex:
+            # dict preserves submission order: first URL in pool order that works wins.
+            # The map value is the WORKING scheme variant — return it, not the label.
             results = dict(zip(cands, ex.map(_check, cands)))
         for url in cands:
             if results.get(url):
-                return url
+                return results[url]
         return ""
 
     def verify(self, target: str) -> dict:
