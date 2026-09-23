@@ -519,3 +519,34 @@ def test_pick_fast_rejects_slow_ping(monkeypatch):
     assert c.pick_fast(limit=5, max_probes=5, max_ping_ms=128) == ""
     assert traffic["n"] == 0, "slow node must not reach the traffic check"
     assert c.pick_fast(limit=5, max_probes=5, max_ping_ms=0) == "http://1.2.3.4:8888"
+
+
+def test_pick_fast_rejects_slow_relay(monkeypatch):
+    """Traffic check slower than max_ping_ms is rejected (relay speed gate)."""
+    from github_register import nextproxy as nx
+
+    c = nx.NextProxyClient()
+    monkeypatch.setattr(nx.NextProxyClient, "probe", lambda self, url, timeout=5.0: 0.050)
+    monkeypatch.setattr(nx, "direct_exit_ip", lambda timeout=8.0: "9.9.9.9")
+
+    class _Resp:
+        ok = True
+        text = "1.2.3.4"
+        status_code = 200
+
+    import requests as _rq
+    import time as _time
+    calls = {"t": [0.0]}
+    real_perf = _time.perf_counter
+
+    def _fake_get(*a, **k):
+        calls["t"][0] += 2.5  # simulate a 2.5s relay
+        return _Resp()
+
+    monkeypatch.setattr(_rq, "get", _fake_get)
+    monkeypatch.setattr(nx.time, "time", lambda: calls["t"][0])
+    monkeypatch.setattr(nx.NextProxyClient, "fetch_urls", lambda self, **k: ["http://1.2.3.4:8888"])
+    try:
+        assert c.pick_fast(limit=5, max_probes=5, max_ping_ms=128) == ""
+    finally:
+        monkeypatch.undo()

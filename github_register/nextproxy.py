@@ -221,12 +221,16 @@ class NextProxyClient:
                 if ping_cap and tcp_s > ping_cap:
                     continue  # too slow — reject before the traffic check
                 try:
+                    t0 = time.time()
                     resp = _requests.get("https://api.ipify.org", proxies={"http": cand, "https": cand},
                                          timeout=10)
+                    relay_ms = (time.time() - t0) * 1000.0
                     exit_ip = (resp.text or "").strip()
                     if resp.ok and re.match(r"^\d+\.\d+\.\d+\.\d+\s*$", exit_ip or ""):
                         if mine and exit_ip == mine:
                             continue  # transparent: exit == our real IP, leaks identity
+                        if ping_cap and relay_ms > max_ping_ms:
+                            continue  # relay too slow (proxy -> target leg)
                         return cand  # return the WORKING scheme, not the labeled one
                 except Exception:
                     continue
