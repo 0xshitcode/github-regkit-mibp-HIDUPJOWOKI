@@ -300,7 +300,6 @@ class StartBody(BaseModel):
 
 
 class ConfigBody(BaseModel):
-    pakmail_service: Optional[str] = None
     pakmail_domain: Optional[str] = None
     pakmail_domain_whitelist: Optional[str] = None
     pakmail_domain_blacklist: Optional[str] = None
@@ -454,24 +453,22 @@ async def api_put_config(body: ConfigBody, x_access_key: Optional[str] = Header(
 
 
 class PakMailBody(BaseModel):
-    pakmail_service: Optional[str] = None
+    pass
 
 
 @app.post("/api/pakmail/domains")
 async def api_pakmail_domains(
     body: PakMailBody, x_access_key: Optional[str] = Header(None)
 ) -> Dict[str, Any]:
-    """Return PakMail domains for a service (server-1/2 support custom domains)."""
+    """Return PakMail server-2 domains (only server used)."""
     _require_auth(x_access_key)
-    cfg = load_config(ROOT / "config.json")
-    service = (body.pakmail_service or getattr(cfg, "pakmail_service", "server-1") or "server-1")
     try:
         from github_register.pakmail import PakMailClient
-        client = PakMailClient(service=service)
-        domains = client._get_domains(service)
+        client = PakMailClient()
+        domains = client._get_domains("server-2")
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Unable to contact PakMail: {exc}")
-    return {"ok": True, "domains": domains, "service": service}
+    return {"ok": True, "domains": domains, "service": "server-2"}
 
 
 class NextProxyBody(BaseModel):
@@ -786,7 +783,6 @@ def _run_resend(key: str, email: str, stop_event: threading.Event) -> None:
         from github_register.pakmail import PakMailClient
 
         client = PakMailClient(
-            service=getattr(cfg, "pakmail_service", "server-1") or "server-1",
             domain=getattr(cfg, "pakmail_domain", "") or "",
             domain_whitelist=getattr(cfg, "pakmail_domain_whitelist", "") or "",
             domain_blacklist=getattr(cfg, "pakmail_domain_blacklist", "") or "",

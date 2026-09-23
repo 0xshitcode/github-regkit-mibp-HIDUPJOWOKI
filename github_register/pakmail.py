@@ -27,7 +27,7 @@ from .mail_errors import MailboxCancelled, MailboxTimeoutError
 API_BASE = "https://pakmail.vercel.app/api"
 BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
-_SERVICES = ("server-1", "server-2", "server-3", "gmail")
+_SERVICE = "server-2"  # locked: only server-2 is used
 
 _LOCAL_CHARS = string.ascii_lowercase + string.digits
 
@@ -45,15 +45,14 @@ class PakMailClient:
 
     def __init__(
         self,
-        service: str = "server-1",
+        service: str = "server-2",
         domain: str = "",
         domain_whitelist: str = "",
         domain_blacklist: str = "",
     ):
-        service = (service or "server-1").strip().lower()
-        if service not in _SERVICES:
-            raise PakMailError(f"unknown pakmail service {service!r} (want one of {_SERVICES})")
-        self.service = service
+        # Only server-2 is used (proven: full bodies via detail endpoint,
+        # custom domains supported). Anything else is coerced.
+        self.service = _SERVICE
         self.domain = (domain or "").strip().lower()
         self.whitelist = set(_split_csv(domain_whitelist))
         self.blacklist = set(_split_csv(domain_blacklist))
@@ -106,12 +105,10 @@ class PakMailClient:
         """Create mailbox. Returns (email, order_id)."""
         svc = self.service
         body: dict = {"service": svc}
-        # server-1/2 support custom name+domain; server-3/gmail are random-only
-        if svc in ("server-1", "server-2"):
-            body["name"] = (name or self._random_localpart()).lower()
-            domain = self._pick_domain()
-            if domain:
-                body["domain"] = domain
+        body["name"] = (name or self._random_localpart()).lower()
+        domain = self._pick_domain()
+        if domain:
+            body["domain"] = domain
         try:
             resp = self.session.post(f"{API_BASE}/mailboxes", json=body, timeout=20)
             data = resp.json()
@@ -138,7 +135,7 @@ class PakMailClient:
         parts = (order_id or "").split("|")
         mid = parts[0] if len(parts) > 0 else ""
         token = parts[1] if len(parts) > 1 else ""
-        svc = parts[2] if len(parts) > 2 else "server-1"
+        svc = parts[2] if len(parts) > 2 else _SERVICE
         return mid, token, svc
 
     @staticmethod
@@ -176,6 +173,29 @@ class PakMailClient:
         msgs = data.get("messages") or []
         return msgs if isinstance(msgs, list) else []
 
+    def get_message_detail(self, order_id: str, message_id: str) -> dict:
+        """Full body of one message (server-2/3 lists carry metadata only)."""
+        mid, token, svc = self._parse_order(order_id)
+        if not mid:
+            mid = quote(order_id, safe="")
+        params = {"service": svc}
+        if token:
+            params["token"] = token
+        try:
+            resp = self.session.get(
+                f"{API_BASE}/mailboxes/{mid}/messages/{message_id}",
+                params=params, timeout=20,
+            )
+            data = resp.json()
+        except requests.RequestException as exc:
+            raise PakMailError(f"pakmail detail failed (network): {exc}")
+        except ValueError:
+            raise PakMailError("pakmail detail failed (bad json)")
+        if not data.get("ok"):
+            raise PakMailError(f"pakmail detail failed: {data.get('error')}")
+        msg = data.get("message") or {}
+        return msg if isinstance(msg, dict) else {}
+
     def wait_for_code(
         self,
         order_id: str,
@@ -206,6 +226,23 @@ class PakMailClient:
                     for k in ("subject", "bodyText", "bodyPreview", "bodyHtml", "from", "fromEmail")
                 )
                 code = extract_github_code(blob) or self._fallback_code(blob)
+                if not code and msg.get("id"):
+                    # server-2/3 lists carry metadata only — pull the full body
+                    # when the message looks GitHub-relevant.
+                    head = f"{msg.get('subject', '')} {msg.get('from', '')} {msg.get('fromEmail', '')}".lower()
+                    if "github" in head or "launch" in head or "verif" in head or "code" in head:
+                        try:
+                            detail = self.get_message_detail(order_id, str(msg["id"]))
+                        except PakMailError as exc:
+                            if log:
+                                log(f"[i] pakmail detail fetch failed: {exc}")
+                            detail = {}
+                        if detail:
+                            blob = "\n".join(
+                                str(detail.get(k) or "")
+                                for k in ("subject", "bodyText", "bodyPreview", "bodyHtml")
+                            )
+                            code = extract_github_code(blob) or self._fallback_code(blob)
                 if not code:
                     continue
                 if code in skip:

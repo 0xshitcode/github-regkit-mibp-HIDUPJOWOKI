@@ -51,11 +51,11 @@ def test_pakmail_share_url():
 def test_pakmail_domain_filters():
     from github_register.pakmail import PakMailClient
 
-    c = PakMailClient(service="server-1", domain_whitelist="ozsaip.com, yzcalo.com")
-    c._domains["server-1"] = ["ozsaip.com", "bad.com"]
+    c = PakMailClient(domain_whitelist="ozsaip.com, yzcalo.com")
+    c._domains["server-2"] = ["ozsaip.com", "bad.com"]
     assert c._pick_domain() == "ozsaip.com"
-    c2 = PakMailClient(service="server-1", domain_blacklist="bad.com")
-    c2._domains["server-1"] = ["ozsaip.com", "bad.com"]
+    c2 = PakMailClient(domain_blacklist="bad.com")
+    c2._domains["server-2"] = ["ozsaip.com", "bad.com"]
     assert c2._pick_domain() == "ozsaip.com"
 
 
@@ -102,7 +102,7 @@ def test_pakmail_wait_for_code_raises_mailbox_timeout():
     from github_register.pakmail import PakMailClient, PakMailError
     from github_register.mail_errors import MailboxTimeoutError
 
-    cli = PakMailClient(service="server-1")
+    cli = PakMailClient()
     cli.get_messages = lambda order_id: []
 
     try:
@@ -121,7 +121,7 @@ def test_register_one_continues_after_mailbox_timeout():
     from github_register.config import Config
     from github_register.mail_errors import MailboxTimeoutError
 
-    cfg = Config(pakmail_service="server-1")
+    cfg = Config()
 
     def _boom(*args, **kwargs):
         raise MailboxTimeoutError("no GitHub code after 240s")

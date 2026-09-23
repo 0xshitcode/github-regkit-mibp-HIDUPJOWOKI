@@ -5,14 +5,10 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-PAKMAIL_SERVICES = ("server-1", "server-2", "server-3", "gmail")
-
-
 @dataclass
 class Config:
-    # PakMail temp email (https://pakmail.vercel.app/docs)
-    pakmail_service: str = "server-1"  # server-1 | server-2 | server-3 | gmail
-    pakmail_domain: str = ""  # empty = auto-pick (server-1/2 only)
+    # PakMail temp email, server-2 only (https://pakmail.vercel.app/docs)
+    pakmail_domain: str = ""  # empty = auto-pick
     pakmail_domain_whitelist: str = ""  # csv, e.g. "ozsaip.com,yzcalo.com"
     pakmail_domain_blacklist: str = ""  # csv, excluded even if service lists them
     # NextProxy live proxy source (https://console.nextproxy.site)
@@ -50,12 +46,9 @@ class Config:
         known = set(cls.__dataclass_fields__)
         # tolerate legacy keys from pre-refactor configs (litensi/mailcx/file proxy)
         legacy = {"mail_provider", "mailcx_domain", "litensi_api_id", "litensi_api_key",
-                  "litensi_site", "litensi_zone", "proxy", "proxy_file", "proxy_source"}
+                  "litensi_site", "litensi_zone", "proxy", "proxy_file", "proxy_source",
+                  "pakmail_service"}
         mapped = {k: v for k, v in data.items() if k in known and k not in legacy}
-        # legacy pakmail_service values pass through; validate lightly
-        if isinstance(mapped.get("pakmail_service"), str):
-            svc = mapped["pakmail_service"].strip().lower()
-            mapped["pakmail_service"] = svc if svc in PAKMAIL_SERVICES else "server-1"
         return cls(**mapped)
 
 

@@ -2194,7 +2194,6 @@ def register_one(
 
     # --- PakMail client (order deferred until the signup form is ready) ---
     mail = PakMailClient(
-        service=getattr(cfg, "pakmail_service", "server-1") or "server-1",
         domain=getattr(cfg, "pakmail_domain", "") or "",
         domain_whitelist=getattr(cfg, "pakmail_domain_whitelist", "") or "",
         domain_blacklist=getattr(cfg, "pakmail_domain_blacklist", "") or "",

@@ -46,7 +46,7 @@ const POST_FIELDS = [
   { key: "profile_location", label: "Profile location (blank = Random User)", group: "Post-Signup Stages" },
 ];
 
-const PAKMAIL_SERVICES = ["server-1", "server-2", "server-3", "gmail"];
+const PAKMAIL_SERVICE = "server-2";
 const PROXY_TYPES = ["socks5", "https", "socks4", "all"];
 
 export default function ConfigPanel() {
@@ -65,11 +65,11 @@ export default function ConfigPanel() {
       .catch((error) => setConfigError(error.message || "Configuration could not be loaded"));
   }, []);
 
-  useEffect(() => { if (cfg) refreshDomains(cfg.pakmail_service || "server-1"); }, [cfg?.pakmail_service]);
+  useEffect(() => { refreshDomains(); }, []);
 
-  async function refreshDomains(service) {
+  async function refreshDomains() {
     try {
-      const d = await api.post("/api/pakmail/domains", { pakmail_service: service });
+      const d = await api.post("/api/pakmail/domains", {});
       setDomains(d.domains || []);
     } catch { /* offline — manual entry still works */ }
   }
@@ -90,7 +90,6 @@ export default function ConfigPanel() {
     setBusy(true);
     try {
       const patch = {
-        pakmail_service: cfg.pakmail_service ?? "server-1",
         pakmail_domain: cfg.pakmail_domain ?? "",
         pakmail_domain_whitelist: cfg.pakmail_domain_whitelist ?? "",
         pakmail_domain_blacklist: cfg.pakmail_domain_blacklist ?? "",
@@ -133,11 +132,8 @@ export default function ConfigPanel() {
             <div style={styles.fieldsGrid} className="cfg-fields">
               <div style={styles.fieldWide} className="cfg-field-wide">
                 <label style={styles.field}>
-                  <span style={styles.label}>Service</span>
-                  <select style={styles.select} value={cfg.pakmail_service || "server-1"}
-                    onChange={(e) => set("pakmail_service", e.target.value)}>
-                    {PAKMAIL_SERVICES.map((s) => (<option key={s} value={s}>{s}</option>))}
-                  </select>
+                  <span style={styles.label}>Service (locked)</span>
+                  <Input type="text" value="server-2" disabled style={{ width: "100%" }} />
                 </label>
               </div>
               <div style={styles.fieldWide} className="cfg-field-wide">

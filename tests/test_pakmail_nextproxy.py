@@ -13,17 +13,17 @@ from github_register.pakmail import PakMailClient
 
 
 def test_pakmail_order_id_roundtrip():
-    c = PakMailClient(service="server-1")
+    c = PakMailClient()
     mid, token, svc = c._parse_order("abc%40x.com|tok123|server-2")
     assert (mid, token, svc) == ("abc%40x.com", "tok123", "server-2")
 
 
 def test_pakmail_whitelist_blacklist():
-    c = PakMailClient(service="server-1", domain_whitelist="ozsaip.com, yzcalo.com")
-    c._domains["server-1"] = ["ozsaip.com", "bad.com"]
+    c = PakMailClient(domain_whitelist="ozsaip.com, yzcalo.com")
+    c._domains["server-2"] = ["ozsaip.com", "bad.com"]
     assert c._pick_domain() == "ozsaip.com"
-    c2 = PakMailClient(service="server-1", domain_blacklist="bad.com")
-    c2._domains["server-1"] = ["ozsaip.com", "bad.com"]
+    c2 = PakMailClient(domain_blacklist="bad.com")
+    c2._domains["server-2"] = ["ozsaip.com", "bad.com"]
     assert c2._pick_domain() == "ozsaip.com"
 
 
@@ -37,19 +37,18 @@ def test_config_loads_new_fields(tmp_path):
     import json
 
     p = tmp_path / "config.json"
-    p.write_text(json.dumps({"pakmail_service": "server-2", "pakmail_domain_whitelist": "ozsaip.com",
+    p.write_text(json.dumps({"pakmail_domain_whitelist": "ozsaip.com",
                              "nextproxy_type": "socks5", "nextproxy_api_key": "k"}))
     from github_register.config import load_config
     cfg = load_config(p)
-    assert cfg.pakmail_service == "server-2"
     assert cfg.pakmail_domain_whitelist == "ozsaip.com"
     assert cfg.nextproxy_api_key == "k"
     # legacy keys are tolerated, not stored
     p.write_text(json.dumps({"mail_provider": "mailcx", "proxy_file": "proxies.txt",
                              "litensi_api_key": "x", "pakmail_service": "server-1"}))
     cfg2 = load_config(p)
-    assert cfg2.pakmail_service == "server-1"
     assert not hasattr(cfg2, "mail_provider")
+    assert not hasattr(cfg2, "pakmail_service")
 
 
 def test_runner_picks_nextproxy(monkeypatch):
@@ -67,7 +66,7 @@ def test_runner_picks_nextproxy(monkeypatch):
 def test_e2e_pakmail_servers():
     if os.getenv("PAKMAIL_E2E") != "1":
         return
-    for svc in ("server-1", "server-2", "server-3", "gmail"):
+    for svc in ("server-2",):
         c = PakMailClient(service=svc)
         email, order = c.create_mailbox()
         assert "@" in email, svc
