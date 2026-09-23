@@ -219,12 +219,12 @@ def _proxy_is_socks(proxy: Optional[dict]) -> bool:
     return bool(proxy) and str(proxy.get("server", "")).startswith("socks")
 
 
-def _socks_exit_ip(url: str, timeout: int = 8) -> str:
+def _proxy_exit_ip(url: str, timeout: int = 8) -> str:
     """Resolve the proxy exit IP (remote DNS via socks5h for SOCKS URLs).
 
     Pool nodes already passed a traffic check in pick_fast, so this is a
-    single quick pass: 2 endpoints, no warm-up sleep. Failure disables geoip
-    pinning but does not block the run.
+    single quick pass: 2 endpoints, no warm-up sleep. Raises SignupError on
+    failure so a node that died between pick and launch rotates immediately.
     """
     import requests as _requests
 
@@ -897,21 +897,22 @@ def _browser_ctx_options(cfg: Config, log=None) -> dict:
     proxy = _parse_proxy(proxy_url)
     # No-auth public pool: pass the proxy straight to the browser.
     opts["proxy"] = proxy
-    if _proxy_is_socks(proxy):
-        try:
-            exit_ip = _socks_exit_ip(proxy_url)
-            opts["geoip"] = exit_ip
-            global _last_exit_ip
-            _last_exit_ip = exit_ip  # consumed by trust-cookie IP binding
-            if log:
-                log(f"[*] socks proxy exit IP: {exit_ip} (geoip pinned, sticky)")
-        except Exception as exc:
-            opts["geoip"] = False
-            _last_exit_ip = None  # no IP to bind — do NOT restore stale cookies
-            if log:
-                log(f"[!] socks exit-IP lookup failed ({exc}); geoip disabled — "
-                    f"timezone/locale may mismatch the proxy country. "
-                    f"Trust cookie will NOT be restored (IP unknown).")
+    # Resolve the exit IP ourselves through the proxy and pin it via geoip:
+    # pool nodes die within seconds, and Camoufox's own probe (ipecho.net)
+    # may fail where our check just passed. A dead node raises here — with
+    # 'proxy' in the message so the IP-retry policy picks a fresh node.
+    try:
+        exit_ip = _proxy_exit_ip(proxy_url)
+        opts["geoip"] = exit_ip
+        global _last_exit_ip
+        _last_exit_ip = exit_ip  # consumed by trust-cookie IP binding
+        if log:
+            log(f"[*] proxy exit IP: {exit_ip} (geoip pinned, sticky)")
+    except Exception as exc:
+        _last_exit_ip = None  # no IP to bind — do NOT restore stale cookies
+        raise SignupError(
+            f"proxy died between pick and launch ({exc}); rotating to a fresh node"
+        )
     if getattr(cfg, "fresh_profile", False):
         # fresh browser per account — no user_data_dir at all
         if log:
@@ -2082,6 +2083,17 @@ def register_one(
                 # RegistrationCancelled (Stop pressed) must never be retried.
                 if isinstance(exc, RegistrationCancelled):
                     raise
+                if ip_left <= 0 or not _looks_ip_related(exc):
+                    raise
+                ip_left -= 1
+                log(f"[!] IP/proxy failure ({str(exc)[:120]}); rotating IP + retrying same account, "
+                    f"{ip_left} retries left")
+                _rotate_sticky_proxy()
+                _sleep_with_cancel(5, stop)
+            except Exception as exc:
+                # Browser-launch failures (e.g. Camoufox geoip probe dying on
+                # a node that just passed pick) are not SignupErrors but are
+                # still IP-caused: rotate and retry when the message matches.
                 if ip_left <= 0 or not _looks_ip_related(exc):
                     raise
                 ip_left -= 1

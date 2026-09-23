@@ -454,3 +454,23 @@ def test_proxy_required_refuses_direct(monkeypatch):
         assert runner._looks_ip_related(exc) is True
     else:
         raise AssertionError("expected SignupError, direct must be refused")
+
+
+def test_generic_launch_failure_with_proxy_marker_retries(monkeypatch):
+    """Non-SignupError launch failures (Camoufox geoip) rotate when IP-marked."""
+    from github_register import runner
+    from github_register.config import Config
+
+    cfg = Config(proxy_retry_attempts=2)
+    calls = {"n": 0}
+
+    def _flaky(*args, **kwargs):
+        calls["n"] += 1
+        raise RuntimeError("Failed to get IP address: Unable to connect to proxy (timeout)")
+
+    monkeypatch.setattr(runner, "_run_signup", _flaky)
+    monkeypatch.setattr(runner, "_sleep_with_cancel", lambda *a, **k: None)
+    result = runner.register_one(cfg, log=lambda m: None)
+    # initial + 2 IP-retries, then gives up (None) instead of instant FAIL
+    assert calls["n"] == 3, f"expected 3 attempts, ran {calls['n']}x"
+    assert result is None

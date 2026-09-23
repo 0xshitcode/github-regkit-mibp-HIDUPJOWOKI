@@ -209,7 +209,7 @@ def _warn_if_warp_ip(cfg=None, log=print) -> None:
     if cfg is not None and (getattr(cfg, "nextproxy_api_key", "") or "").strip():
         from urllib.parse import urlsplit as _us
 
-        from github_register.runner import _ensure_sticky_proxy, _pick_proxy_url, _socks_exit_ip
+        from github_register.runner import _ensure_sticky_proxy, _pick_proxy_url, _proxy_exit_ip
 
         effective = _ensure_sticky_proxy(_pick_proxy_url(cfg, log=log), log=log)
         p = _us(effective.strip())
@@ -217,7 +217,7 @@ def _warn_if_warp_ip(cfg=None, log=print) -> None:
         log(f"[*] browser will run via proxy: {masked}")
         if (p.scheme or "").lower().startswith("socks"):
             try:
-                exit_ip = _socks_exit_ip(effective)
+                exit_ip = _proxy_exit_ip(effective)
                 log(f"[*] proxy exit IP (sticky): {exit_ip}")
             except Exception as exc:
                 log(f"[!] proxy exit-IP lookup failed: {exc}")
