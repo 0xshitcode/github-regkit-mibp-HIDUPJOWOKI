@@ -1264,13 +1264,18 @@ def _create_repository(page, username: str, base_name: str, log) -> str:
         raise SignupError(f"cannot click 'Create repository': {exc}")
     # success = redirected to /<username>/<repo>
     deadline = time.time() + 30
+    noted = False
     while time.time() < deadline:
+        _raise_if_rate_limited(page)  # fail fast with the right type, not a 30s mystery spin
         url = page.url or ""
         if "/login" in url:
             raise SignupError(f"session bounced to login during repo create; url={url}")
         if "/new" not in url and f"/{username}/" in url:
             log(f"[*] repository created: {url}")
             return name
+        if not noted and time.time() > deadline - 20:
+            noted = True
+            log(f"[*] repo create pending (url={url})")
         # name conflict? GitHub shows an error — retry with a numeric suffix
         err = ""
         try:
@@ -1765,7 +1770,7 @@ def _with_reauth_stage(page, context, cfg, email, password, mail, order_id,
             used_codes=used_codes, stop=stop,
         )
         if not ok:
-            raise SignupError(f"{label}: re-login failed after bounce ({exc})")
+            raise SignupError(f"{label}: re-login failed after bounce ({exc}; url={page.url})")
         return fn()
 
 
