@@ -11,6 +11,5 @@ accounts/
 .playwright-mcp/
 .env
 config.json
-proxies.txt
 *.log
 .DS_Store

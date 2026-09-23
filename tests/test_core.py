@@ -1,4 +1,4 @@
-"""Self-check for non-network logic. Run: python -m tests.test_core"""
+"""Self-check for non-network logic. Run: python -m pytest tests/ -q"""
 from __future__ import annotations
 
 import sys
@@ -38,46 +38,33 @@ def test_username():
         assert is_valid_username(name), name
 
 
-def test_litensi_zone_pick():
-    from github_register.litensi import LitensiClient
+def test_pakmail_share_url():
+    from github_register.pakmail import PakMailClient
 
-    cli = LitensiClient("id", "key", "github", "")
-    zones = [
-        {"zone": "a", "stock": 0, "price": 1},
-        {"zone": "b", "stock": 5, "price": 3},
-        {"zone": "c", "stock": 2, "price": 1.5},
-    ]
-    stock = [z for z in zones if float(z.get("stock") or 0) > 0]
-    assert min(stock, key=lambda z: float(z.get("price") or 0))["zone"] == "c"
+    url = PakMailClient.share_url(order_id="a%40b.com|tok123|server-1")
+    assert url == "https://pakmail.vercel.app/share/b.com/a?t=tok123"
+    assert PakMailClient.share_url(order_id="no-token-here") == ""
+    mid, token, svc = PakMailClient._parse_order("a%40b.com|tok123|server-2")
+    assert (mid, token, svc) == ("a%40b.com", "tok123", "server-2")
 
 
-def test_proxy_pool_pick():
-    from github_register.config import Config
-    from github_register.runner import _pick_proxy_url, load_proxy_pool
+def test_pakmail_domain_filters():
+    from github_register.pakmail import PakMailClient
 
-    from github_register import runner
+    c = PakMailClient(service="server-1", domain_whitelist="ozsaip.com, yzcalo.com")
+    c._domains["server-1"] = ["ozsaip.com", "bad.com"]
+    assert c._pick_domain() == "ozsaip.com"
+    c2 = PakMailClient(service="server-1", domain_blacklist="bad.com")
+    c2._domains["server-1"] = ["ozsaip.com", "bad.com"]
+    assert c2._pick_domain() == "ozsaip.com"
 
-    pool_name = "_test_pool_tmp.txt"
-    pool_path = runner.ROOT / pool_name
-    pool_path.write_text(
-        "# comment\n"
-        "http://u:p@1.1.1.1:8080\n"
-        "\n"
-        "not a proxy line\n"
-        "socks5://u:p@2.2.2.2:1080\n",
-        encoding="utf-8",
-    )
-    try:
-        pool = load_proxy_pool(pool_name)
-        assert pool == ["http://u:p@1.1.1.1:8080", "socks5://u:p@2.2.2.2:1080"], pool
-        cfg = Config(proxy="http://fallback:1@3.3.3.3:80", proxy_file=pool_name)
-        assert _pick_proxy_url(cfg) in pool
-        cfg2 = Config(proxy="http://fallback:1@3.3.3.3:80", proxy_file="")
-        assert _pick_proxy_url(cfg2) == "http://fallback:1@3.3.3.3:80"
-        cfg3 = Config(proxy="http://fallback:1@3.3.3.3:80", proxy_file="_missing_pool.txt")
-        assert _pick_proxy_url(cfg3) == "http://fallback:1@3.3.3.3:80"
-    finally:
-        pool_path.unlink(missing_ok=True)
+
+def test_nextproxy_to_url_and_probe_shape():
+    from github_register.nextproxy import NextProxyClient
+
+    assert NextProxyClient.to_url({"ip": "1.2.3.4", "port": "1080", "protocol": "socks5"}) == "socks5h://1.2.3.4:1080"
+    assert NextProxyClient.to_url({"ip": "1.2.3.4", "port": "8080", "protocol": "https"}) == "https://1.2.3.4:8080"
+    assert NextProxyClient.probe("socks5h://192.0.2.1:1080", timeout=0.5) == -1.0  # TEST-NET-1, unroutable
 
 
 def test_parse_public_profile():
@@ -103,55 +90,27 @@ def test_parse_public_profile():
 
 
 def test_mailbox_timeout_is_not_fatal_provider_error():
-    """A per-mailbox 'no code' timeout must NOT abort the whole job.
-
-    Fatal provider/config errors (bad key, no balance, out of stock) are
-    LitensiError / MailCxError and DO abort. A single mailbox that never got
-    the GitHub code is a transient per-account failure and must be a separate,
-    non-fatal type.
-    """
-    from github_register.litensi import LitensiError
-    from github_register.mailcx import MailCxError
+    """A per-mailbox 'no code' timeout must NOT abort the whole job."""
+    from github_register.pakmail import PakMailError
     from github_register.mail_errors import MailboxTimeoutError
 
-    # A mailbox timeout must not be classified as a fatal provider error.
-    assert not issubclass(MailboxTimeoutError, LitensiError)
-    assert not issubclass(MailboxTimeoutError, MailCxError)
+    assert not issubclass(MailboxTimeoutError, PakMailError)
 
 
-def test_litensi_wait_for_code_raises_mailbox_timeout(monkeypatch=None):
-    """wait_for_code timeout raises MailboxTimeoutError, not LitensiError."""
-    from github_register.litensi import LitensiClient, LitensiError
+def test_pakmail_wait_for_code_raises_mailbox_timeout():
+    """wait_for_code timeout raises MailboxTimeoutError, not PakMailError."""
+    from github_register.pakmail import PakMailClient, PakMailError
     from github_register.mail_errors import MailboxTimeoutError
 
-    cli = LitensiClient("id", "key", "github.com", "zone")
-    # Every poll reports "no message yet" (no code in the payload).
-    cli.get_status = lambda order_id: {"status": "WAITING", "message": ""}
+    cli = PakMailClient(service="server-1")
+    cli.get_messages = lambda order_id: []
 
     try:
-        cli.wait_for_code("123", timeout=0, poll_interval=5)
+        cli.wait_for_code("a%40b.com|tok|server-1", timeout=0, poll_interval=8)
     except MailboxTimeoutError:
         pass
-    except LitensiError as exc:  # the bug: a timeout looked like a fatal error
-        raise AssertionError(f"timeout raised fatal LitensiError instead: {exc}")
-    else:
-        raise AssertionError("wait_for_code must raise on timeout")
-
-
-def test_mailcx_wait_for_code_raises_mailbox_timeout():
-    """mail.cx timeout raises MailboxTimeoutError, not MailCxError."""
-    from github_register.mailcx import MailCxClient, MailCxError
-    from github_register.mail_errors import MailboxTimeoutError
-
-    cli = MailCxClient()
-    cli.get_messages = lambda address: []
-
-    try:
-        cli.wait_for_code("a@b.com", timeout=0, poll_interval=5)
-    except MailboxTimeoutError:
-        pass
-    except MailCxError as exc:  # the bug: a timeout looked like a fatal error
-        raise AssertionError(f"timeout raised fatal MailCxError instead: {exc}")
+    except PakMailError as exc:  # the bug: a timeout looked like a fatal error
+        raise AssertionError(f"timeout raised fatal PakMailError instead: {exc}")
     else:
         raise AssertionError("wait_for_code must raise on timeout")
 
@@ -159,10 +118,10 @@ def test_mailcx_wait_for_code_raises_mailbox_timeout():
 def test_register_one_continues_after_mailbox_timeout():
     """register_one returns None (one failed account) on a mailbox timeout."""
     from github_register import runner
+    from github_register.config import Config
     from github_register.mail_errors import MailboxTimeoutError
 
-    cfg = runner.Config(mail_provider="litensi", litensi_api_id="id",
-                        litensi_api_key="key", litensi_site="github.com")
+    cfg = Config(pakmail_service="server-1")
 
     def _boom(*args, **kwargs):
         raise MailboxTimeoutError("no GitHub code after 240s")
@@ -179,9 +138,10 @@ def test_register_one_continues_after_mailbox_timeout():
 def test_run_job_continues_after_mailbox_timeout():
     """run_job keeps going after mailbox timeouts (real register_one path)."""
     from github_register import runner
+    from github_register.config import Config
     from github_register.mail_errors import MailboxTimeoutError
 
-    cfg = runner.Config(mail_provider="mailcx", register_count=3, delay_sec=0)
+    cfg = Config(register_count=3, delay_sec=0)
     calls = {"n": 0}
 
     def _signup(*args, **kwargs):
@@ -202,16 +162,17 @@ def test_run_job_continues_after_mailbox_timeout():
 
 
 def test_run_job_aborts_on_fatal_provider_error():
-    """A genuine provider error (bad key / no balance) still aborts the job."""
+    """A genuine provider error still aborts the job."""
     from github_register import runner
-    from github_register.litensi import LitensiError
+    from github_register.config import Config
+    from github_register.pakmail import PakMailError
 
-    cfg = runner.Config(mail_provider="litensi", register_count=3, delay_sec=0)
+    cfg = Config(register_count=3, delay_sec=0)
     calls = {"n": 0}
 
     def _one(cfg, log, stop):
         calls["n"] += 1
-        raise LitensiError("NOT ENOUGH BALANCE — Litensi balance is insufficient")
+        raise PakMailError("pakmail create failed: RATE_LIMITED")
 
     orig = runner.register_one
     runner.register_one = _one

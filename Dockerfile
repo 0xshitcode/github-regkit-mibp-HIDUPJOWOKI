@@ -32,7 +32,7 @@ RUN python -m camoufox fetch
 
 COPY github_register/ ./github_register/
 COPY web/ ./web/
-COPY main.py proxy_rotator.py config.example.json ./
+COPY main.py config.example.json ./
 
 COPY --from=frontend /build/dist ./frontend/dist
 

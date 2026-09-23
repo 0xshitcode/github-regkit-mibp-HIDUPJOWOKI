@@ -1,4 +1,4 @@
-"""GitHub sign-up automation driven by Camoufox (Firefox anti-detect) + Litensi mail."""
+"""GitHub sign-up automation driven by Camoufox (Firefox anti-detect) + PakMail + NextProxy."""
 from __future__ import annotations
 
 import json
@@ -19,9 +19,9 @@ from camoufox.sync_api import Camoufox
 import requests
 
 from .config import Config
-from .litensi import LitensiClient, LitensiError
 from .mail_errors import MailboxCancelled, MailboxTimeoutError
-from .mailcx import MailCxClient, MailCxError
+from .nextproxy import NextProxyClient, NextProxyError
+from .pakmail import PakMailClient, PakMailError
 from .profiles import (
     generate_password,
     generate_username,
@@ -166,16 +166,51 @@ def load_proxy_pool(name: str) -> list[str]:
     return out
 
 
-def _pick_proxy_url(cfg: Config, log=None) -> str:
-    """Effective proxy URL: random pick from proxy_file pool, else the single URL."""
-    name = (getattr(cfg, "proxy_file", "") or "").strip()
-    if name:
-        pool = load_proxy_pool(name)
-        if pool:
-            return random.choice(pool)
+_NEXTPROXY_CACHE: dict = {"at": 0.0, "urls": []}
+_NEXTPROXY_TTL = 60.0
+
+
+def _pick_nextproxy_url(cfg: Config, log=None) -> str:
+    """One healthy URL from the NextProxy live pool (60s cache of the winner).
+
+    Public-pool nodes die fast: TCP-probe candidates in latency order and
+    cache only a node that actually connects from this host. Empty = go
+    direct (run-1 proved direct signup works); a dead proxy is worse than
+    no proxy.
+    """
+    now = time.time()
+    cached = _NEXTPROXY_CACHE.get("urls") or []
+    if cached and now - float(_NEXTPROXY_CACHE.get("at") or 0) < _NEXTPROXY_TTL:
+        if NextProxyClient.probe(cached[0], timeout=4.0) >= 0:
+            return cached[0]
+    try:
+        client = NextProxyClient(api_key=getattr(cfg, "nextproxy_api_key", "") or "")
+        url = client.pick_fast(
+            limit=int(getattr(cfg, "nextproxy_limit", 20) or 20),
+            proxy_type=(getattr(cfg, "nextproxy_type", "socks5") or "socks5"),
+            country=(getattr(cfg, "nextproxy_country", "") or ""),
+            max_latency=int(getattr(cfg, "nextproxy_max_latency", 0) or 0),
+            max_probes=5,
+            timeout=4.0,
+        )
+    except NextProxyError as exc:
         if log:
-            log(f"[!] proxy file {name!r} missing/empty — falling back to single proxy URL")
-    return (cfg.proxy or "").strip()
+            log(f"[!] nextproxy fetch failed: {exc}")
+        return ""
+    if url:
+        _NEXTPROXY_CACHE.update({"at": now, "urls": [url]})
+        if log:
+            left = client.credits_remaining
+            extra = f" (credits: {left})" if left else ""
+            log(f"[*] nextproxy: using {url.split('@')[-1]}{extra}")
+    elif log:
+        log("[*] nextproxy pool: no connectable node — going direct")
+    return url
+
+
+def _pick_proxy_url(cfg: Config, log=None) -> str:
+    """Effective proxy URL: one random URL from the NextProxy live pool."""
+    return _pick_nextproxy_url(cfg, log=log)
 
 
 def _proxy_is_socks(proxy: Optional[dict]) -> bool:
@@ -481,7 +516,7 @@ def _disable_blocked_proxy(log) -> None:
     """Tell the proxy rotator to permanently disable the current upstream proxy.
 
     POST to http://127.0.0.1:8100/disable — the rotator comments out the proxy
-    in proxies.txt so it's never used again.
+    in the live pool cache so it's never used again.
     """
     try:
         import urllib.request
@@ -610,49 +645,24 @@ def _reject_blocked(page) -> None:
             raise SignupBlocked(f"github risk check: {marker}")
 
 
-def _cancel_order(mail, order_id: str, log) -> None:
-    """Cancel the Litensi order after a failed registration.
-
-    For Mail.cx this is a no-op (no order system). Litensi returns HTTP 404
-    with ``CANCEL AFTER 4 MINUTES`` when the order is already past the cancel
-    window — that is expected on longer flows and is logged at info level.
-    """
-    if isinstance(mail, LitensiClient) and order_id:
+def _save_email_link(email: str, order_id: str, log) -> str:
+    """Persist PakMail inbox access link per account; returns the share URL."""
+    url = PakMailClient.share_url(order_id=order_id, email=email)
+    if not url:
+        return ""
+    try:
+        (ACCOUNTS_DIR / "email_links.json").parent.mkdir(parents=True, exist_ok=True)
+        path = ACCOUNTS_DIR / "email_links.json"
+        data = {}
         try:
-            mail.set_status(order_id, "CANCELED")
-            log(f"[*] litensi order {order_id} canceled")
-        except Exception as exc:
-            msg = str(exc)
-            if "CANCEL AFTER" in msg or "HTTP 404" in msg:
-                log(f"[i] litensi order {order_id} already past cancel window "
-                    f"(no action needed)")
-            else:
-                log(f"[i] litensi cancel failed (non-fatal): {exc}")
-
-
-def _confirm_order(mail, order_id: str, log) -> None:
-    """Mark the Litensi order as SUCCESS after the code has been consumed.
-
-    Documented in the Litensi API as ``setstatus SUCCESS``; called only when
-    the account was successfully registered end-to-end (per litensi docs the
-    order must be confirmed by the caller). Mail.cx has no order concept so
-    this is a no-op there.
-    """
-    if isinstance(mail, LitensiClient) and order_id:
-        # Prefer the last order id that actually delivered the code — after a
-        # ``reorder`` the original id is no longer the right one to confirm.
-        confirm_id = mail.last_order_id or order_id
-        try:
-            mail.mark_success(confirm_id)
-            log(f"[*] litensi order {confirm_id} confirmed (SUCCESS)")
-        except Exception as exc:
-            msg = str(exc)
-            if "HTTP 404" in msg:
-                # order already expired / auto-confirmed on the provider side
-                log(f"[i] litensi order {confirm_id} setstatus skipped "
-                    f"(already past confirm window)")
-            else:
-                log(f"[i] litensi confirm failed (non-fatal): {exc}")
+            data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        except Exception:
+            data = {}
+        data[email.strip().lower()] = {"url": url, "order_id": order_id}
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:
+        log(f"[i] email link save failed: {exc}")
+    return url
 
 
 def _is_hard_block(page) -> bool:
@@ -1940,7 +1950,7 @@ def _post_form_flow(
         log(f"[*] verification code: {code}")
         used_codes.add(code)
         _fill_launch_code(page, code, log)
-        # mail.cx has no order confirmation — code already extracted
+        # pakmail is stateless — no order confirmation — code already extracted
         log(f"[*] verification code extracted and submitted")
         # after OTP: must reach a logged-in state
         state2 = _wait_post_submit(page, context, timeout=90, log=log, stop=stop)
@@ -2022,7 +2032,7 @@ def _post_form_flow(
 def _run_signup(
     cfg: Config,
     password: str,
-    mail: MailCxClient,
+    mail: PakMailClient,
     provider: str,
     pending: dict,
     log,
@@ -2068,7 +2078,7 @@ def _run_signup(
             _reject_blocked(page)
 
             if "email" not in pending:
-                # Order the mailbox ONLY now that the form is ready — a Litensi
+                # Order the mailbox ONLY now that the form is ready — PakMail
                 # order costs balance and expires in minutes, so never open it
                 # while DataDome may still burn time. Created once, reused
                 # across Tier-1 reloads and Tier-2 session switches.
@@ -2168,24 +2178,20 @@ def register_one(
     """Register one account; returns its one-line account record or None."""
     stop = cancel_cb or (lambda: False)
 
-    # --- create mail client based on provider (order itself is deferred
-    # until the signup form is ready — see _run_signup) ---
-    provider = getattr(cfg, "mail_provider", "mailcx") or "mailcx"
-    if provider == "litensi":
-        mail = LitensiClient(
-            api_id=cfg.litensi_api_id,
-            api_key=cfg.litensi_api_key,
-            site=cfg.litensi_site,
-            zone=cfg.litensi_zone,
-        )
-    else:
-        mail = MailCxClient(domain=cfg.mailcx_domain)
+    # --- PakMail client (order deferred until the signup form is ready) ---
+    mail = PakMailClient(
+        service=getattr(cfg, "pakmail_service", "server-1") or "server-1",
+        domain=getattr(cfg, "pakmail_domain", "") or "",
+        domain_whitelist=getattr(cfg, "pakmail_domain_whitelist", "") or "",
+        domain_blacklist=getattr(cfg, "pakmail_domain_blacklist", "") or "",
+    )
+    provider = "pakmail"
     pending: dict = {}
 
     succeeded = False
     try:
         password = generate_password()
-        has_proxy = bool((cfg.proxy or "").strip() or (getattr(cfg, "proxy_file", "") or "").strip())
+        has_proxy = bool((getattr(cfg, "nextproxy_api_key", "") or "").strip())
         hard_left = int(getattr(cfg, "proxy_hard_block_retries", 0) or 0) if has_proxy else 0
         rate_left = int(getattr(cfg, "proxy_rate_limit_retries", 0) or 0) if has_proxy else 0
         while True:
@@ -2216,6 +2222,9 @@ def register_one(
         # without exposing the codes in the main account list.
         succeeded = True
         email = pending["email"]
+        link = _save_email_link(email, pending.get("order_id", ""), log)
+        if link:
+            log(f"[*] inbox link: {link}")
         return f"{email}----{password}----{username}----{totp_secret}----{int(bool(recovery))}"
     except KeyboardInterrupt:
         raise
@@ -2228,35 +2237,20 @@ def register_one(
         # a clean cancellation, not a provider failure.
         raise RegistrationCancelled("cancelled while waiting for mail")
     except MailboxTimeoutError as exc:
-        # ONE mailbox never received the GitHub code in time. This is a
-        # per-account transient failure — fail only this account and let the
-        # batch continue. (Fatal provider errors such as a bad key or an empty
-        # balance are LitensiError/MailCxError and still abort below.)
-        log(f"[-] account failed: mailbox timeout ({exc}); continuing with the next account")
+        log(f"[-] account failed: mailbox timeout ({exc}); continuing")
         return None
-    except (MailCxError, LitensiError) as exc:
-        # Provider failure (empty balance, bad key, no stock): surface the
-        # error and stop — retrying the next account would fail identically.
+    except PakMailError as exc:
         log(f"[!] mail provider error, aborting: {exc}")
         raise
     except Exception as exc:
         log(f"[-] account failed: {exc}")
         return None
     finally:
+        # PakMail is stateless — no confirm/cancel. Ensure the inbox link is
+        # saved even when the account failed after the mailbox was created.
         order_id = pending.get("order_id")
-        if provider == "litensi" and order_id is not None:
-            # Confirm or cancel the Litensi order based on the actual outcome.
-            # Before: this branch always canceled — that discarded successful
-            # orders (docs say the caller MUST setstatus SUCCESS once the
-            # code has been consumed) and produced misleading logs on both
-            # sides.
-            if succeeded:
-                _confirm_order(mail, order_id, log)
-            else:
-                _cancel_order(mail, order_id, log)
-        elif provider != "litensi":
-            log("[*] mailbox cleanup: no action needed (mail.cx)")
-        # else: form never became ready — no order was ever placed, nothing to settle
+        if pending.get("email") and order_id:
+            _save_email_link(pending["email"], order_id, log)
 
 
 def run_job(
@@ -2287,8 +2281,8 @@ def run_job(
     ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
     out = ACCOUNTS_DIR / f"github_accounts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     ok = fail = 0
-    provider = (getattr(cfg, "mail_provider", "mailcx") or "mailcx").strip().lower()
-    log(f"[*] github-regkit | engine=Camoufox (Firefox anti-detect) | mail_provider={provider} "
+    provider = "pakmail"
+    log(f"[*] github-regkit | engine=Camoufox (Firefox anti-detect) | mail=pakmail "
         f"| headless={cfg.headless} | target={cfg.register_count} | output={out.name}")
     _emit_progress(ok, fail)  # initial snapshot: 0/0
     try:
@@ -2307,7 +2301,7 @@ def run_job(
             except GitHubRateLimited as exc:
                 log(f"[!] rate-limit retries exhausted — stopping job: {exc}")
                 break
-            except (MailCxError, LitensiError) as exc:  # provider-level error: abort job
+            except PakMailError as exc:  # provider-level error: abort job
                 log(f"[!] mail provider error, aborting: {exc}")
                 break
             if line:

@@ -32,8 +32,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from github_register.config import Config, load_config
-from github_register.mailcx import MailCxClient
-from github_register.runner import load_proxy_pool, run_job, silence_playwright_noise
+from github_register.runner import run_job, silence_playwright_noise
 
 silence_playwright_noise()  # hide TargetClosedError spam when browsers close
 
@@ -77,7 +76,7 @@ if AUTH_ENABLED and HOST in ("0.0.0.0", "::"):
 
 DIST = ROOT / "frontend" / "dist"
 
-SECRET_FIELDS = {"proxy", "litensi_api_key"}
+SECRET_FIELDS = {"nextproxy_api_key"}
 
 
 def _migrate_legacy_account_files() -> None:
@@ -119,7 +118,7 @@ _job_state: Dict[str, Any] = {
     "accounts_file": "",
 }
 
-# Resend = reorder the same Litensi mailbox and wait for a fresh code.
+# Resend = re-poll the same PakMail inbox and wait for a fresh code.
 # Hard stop after RESEND_TIMEOUT_SEC with no code so a stale window never
 # hangs a worker thread or the UI forever.
 RESEND_TIMEOUT_SEC = 120
@@ -223,8 +222,7 @@ def _public_config() -> Dict[str, Any]:
     for key in SECRET_FIELDS:
         raw = getattr(cfg, key, "")
         masked[f"has_{key}"] = bool(str(raw or "").strip())
-    pf = (getattr(cfg, "proxy_file", "") or "").strip()
-    masked["proxy_file_count"] = len(load_proxy_pool(pf)) if pf else 0
+    masked["email_links_count"] = len(_email_links_all())
     return masked
 
 
@@ -302,15 +300,17 @@ class StartBody(BaseModel):
 
 
 class ConfigBody(BaseModel):
-    mail_provider: Optional[str] = None
-    mailcx_domain: Optional[str] = None
-    litensi_api_id: Optional[str] = None
-    litensi_api_key: Optional[str] = None
-    litensi_site: Optional[str] = None
-    litensi_zone: Optional[str] = None
+    pakmail_service: Optional[str] = None
+    pakmail_domain: Optional[str] = None
+    pakmail_domain_whitelist: Optional[str] = None
+    pakmail_domain_blacklist: Optional[str] = None
+    proxy_source: Optional[str] = None
+    nextproxy_api_key: Optional[str] = None
+    nextproxy_type: Optional[str] = None
+    nextproxy_country: Optional[str] = None
+    nextproxy_limit: Optional[int] = None
+    nextproxy_max_latency: Optional[int] = None
     register_count: Optional[int] = None
-    proxy: Optional[str] = None
-    proxy_file: Optional[str] = None
     headless: Optional[bool] = None
     delay_sec: Optional[float] = None
     max_username_tries: Optional[int] = None
@@ -452,103 +452,63 @@ async def api_put_config(body: ConfigBody, x_access_key: Optional[str] = Header(
     return {"ok": True, "config": _public_config()}
 
 
-class MailCxConfigBody(BaseModel):
-    """Optional override for mail.cx domain."""
-    mailcx_domain: Optional[str] = None
+class PakMailBody(BaseModel):
+    pakmail_service: Optional[str] = None
 
 
-@app.post("/api/mailcx/domains")
-async def api_mailcx_domains(
-    body: MailCxConfigBody, x_access_key: Optional[str] = Header(None)
+@app.post("/api/pakmail/domains")
+async def api_pakmail_domains(
+    body: PakMailBody, x_access_key: Optional[str] = Header(None)
 ) -> Dict[str, Any]:
-    """Return the list of available mail.cx domains."""
+    """Return PakMail domains for a service (server-1/2 support custom domains)."""
     _require_auth(x_access_key)
     cfg = load_config(ROOT / "config.json")
-    domain = body.mailcx_domain or cfg.mailcx_domain or ""
+    service = (body.pakmail_service or getattr(cfg, "pakmail_service", "server-1") or "server-1")
     try:
-        client = MailCxClient(domain=domain)
-        domains = client._get_domains()
+        from github_register.pakmail import PakMailClient
+        client = PakMailClient(service=service)
+        domains = client._get_domains(service)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Unable to contact mail.cx: {exc}")
-    return {
-        "ok": True,
-        "domains": domains,
-        "current_domain": cfg.mailcx_domain or "",
-    }
+        raise HTTPException(status_code=502, detail=f"Unable to contact PakMail: {exc}")
+    return {"ok": True, "domains": domains, "service": service}
 
 
-class LitensiZoneBody(BaseModel):
-    litensi_api_id: Optional[str] = None
-    litensi_api_key: Optional[str] = None
-    litensi_site: Optional[str] = None
+class NextProxyBody(BaseModel):
+    nextproxy_api_key: Optional[str] = None
+    nextproxy_type: Optional[str] = None
+    nextproxy_country: Optional[str] = None
+    nextproxy_limit: Optional[int] = None
+    nextproxy_max_latency: Optional[int] = None
 
 
-@app.post("/api/litensi/zones")
-async def api_litensi_zones(
-    body: LitensiZoneBody, x_access_key: Optional[str] = Header(None)
+@app.post("/api/nextproxy/pool")
+async def api_nextproxy_pool(
+    body: NextProxyBody, x_access_key: Optional[str] = Header(None)
 ) -> Dict[str, Any]:
-    """Return Litensi zones (prices + stock) for the configured site."""
+    """Fetch live usable proxies from NextProxy (unmasked only)."""
     _require_auth(x_access_key)
     cfg = load_config(ROOT / "config.json")
-    api_id = body.litensi_api_id or cfg.litensi_api_id or ""
-    api_key = body.litensi_api_key or ""
-    if "*" in api_key:  # masked placeholder from GET — fall back to stored key
+    api_key = body.nextproxy_api_key or ""
+    if "*" in api_key:
         api_key = ""
-    api_key = api_key or cfg.litensi_api_key or ""
-    site = body.litensi_site or cfg.litensi_site or ""
-    if not api_id or not api_key:
-        raise HTTPException(status_code=400, detail="litensi_api_id and litensi_api_key are required")
-    if not site:
-        raise HTTPException(status_code=400, detail="litensi_site is required (e.g. github.com)")
+    api_key = api_key or getattr(cfg, "nextproxy_api_key", "") or ""
     try:
-        from github_register.litensi import LitensiClient
-        client = LitensiClient(api_id=api_id, api_key=api_key, site=site)
-        zones = client.prices()
-        stock = [z for z in zones if float(z.get("stock") or 0) > 0]
-        cheapest = min(stock, key=lambda z: float(z.get("price") or 0))["zone"] if stock else ""
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Unable to contact Litensi: {exc}")
-    return {"ok": True, "zones": zones, "site": site, "cheapest": cheapest}
-
-
-PROXY_SCHEMES = ("http", "https", "socks4", "socks5")
-
-
-def _valid_proxy_line(line: str) -> bool:
-    p = urlsplit(line)
-    return bool(p.hostname) and (p.scheme or "http").lower() in PROXY_SCHEMES
-
-
-@app.post("/api/proxy/upload")
-async def api_proxy_upload(
-    request: Request, x_access_key: Optional[str] = Header(None)
-) -> Dict[str, Any]:
-    """Save an uploaded proxy list as the active pool (proxies.txt, one URL per line).
-
-    Body: raw file content (text/plain) — no multipart needed.
-    """
-    _require_auth(x_access_key)
-    raw = (await request.body()).decode("utf-8", errors="replace")
-    valid: List[str] = []
-    seen: set = set()
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or line in seen or not _valid_proxy_line(line):
-            continue
-        seen.add(line)
-        valid.append(line)
-    if not valid:
-        raise HTTPException(
-            status_code=400,
-            detail="no valid proxies found (one per line: scheme://user:pass@host:port)",
+        from github_register.nextproxy import NextProxyClient
+        client = NextProxyClient(api_key=api_key)
+        nodes = client.fetch(
+            limit=body.nextproxy_limit or getattr(cfg, "nextproxy_limit", 20) or 20,
+            proxy_type=body.nextproxy_type or getattr(cfg, "nextproxy_type", "socks5") or "socks5",
+            country=body.nextproxy_country or getattr(cfg, "nextproxy_country", "") or "",
+            max_latency=body.nextproxy_max_latency
+            if body.nextproxy_max_latency is not None
+            else getattr(cfg, "nextproxy_max_latency", 0) or 0,
         )
-    pool_name = "proxies.txt"
-    (ROOT / pool_name).write_text("\n".join(valid) + "\n", encoding="utf-8")
-    cfg = load_config(ROOT / "config.json")
-    cfg.proxy_file = pool_name
-    _save_config(cfg)
-    _append_log(f"[*] proxy pool uploaded: {len(valid)} proxies -> {pool_name}")
-    return {"ok": True, "proxy_file": pool_name, "count": len(valid), "config": _public_config()}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Unable to contact NextProxy: {exc}")
+    preview = [{"ip": n.get("ip"), "port": n.get("port"), "protocol": n.get("protocol"),
+                "country": n.get("country"), "latency": n.get("latency")} for n in nodes[:20]]
+    return {"ok": True, "count": len(nodes),
+            "proxies": preview, "credits_remaining": client.credits_remaining}
 
 
 @app.get("/api/status")
@@ -741,6 +701,33 @@ async def api_accounts_preview(
     return {"ok": True, "rows": rows, "total": len(rows), "name": path.name}
 
 
+EMAIL_LINKS_FILE = ACCOUNTS_DIR / "email_links.json"
+
+
+def _email_links_all() -> dict:
+    try:
+        if EMAIL_LINKS_FILE.is_file():
+            data = json.loads(EMAIL_LINKS_FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+@app.get("/api/accounts/email-link")
+async def api_accounts_email_link(
+    email: str = Query(..., min_length=3, max_length=320),
+    x_access_key: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """Return the PakMail inbox access (share) link for one account."""
+    _require_auth(x_access_key)
+    entry = _email_links_all().get(email.strip().lower(), {})
+    url = (entry or {}).get("url", "")
+    if not url:
+        raise HTTPException(status_code=404, detail="no saved inbox link for this email")
+    return {"ok": True, "email": email, "url": url}
+
+
 @app.get("/api/accounts/recovery")
 async def api_accounts_recovery(
     email: str = Query(..., min_length=3, max_length=320),
@@ -763,9 +750,8 @@ async def api_accounts_recovery(
 def _find_account_email(email: str) -> Optional[str]:
     """Return the stored address when it appears in an accounts file.
 
-    Guards the resend endpoint: reordering an address we never registered would
-    burn Litensi balance for nothing and, worse, could reorder someone else's
-    activation if the address were ever valid on the same account.
+    Guards the resend endpoint: only addresses we registered (and saved an
+    inbox link for) can be re-polled.
     """
     needle = email.strip().lower()
     if not needle:
@@ -796,26 +782,21 @@ def _run_resend(key: str, email: str, stop_event: threading.Event) -> None:
 
     try:
         cfg = load_config(ROOT / "config.json")
-        from github_register.litensi import LitensiClient, LitensiError
+        from github_register.pakmail import PakMailClient
 
-        if not (cfg.litensi_api_id and cfg.litensi_api_key and cfg.litensi_site):
-            raise LitensiError(
-                "Litensi is not configured (litensi_api_id / litensi_api_key / litensi_site)"
-            )
-        client = LitensiClient(
-            api_id=cfg.litensi_api_id,
-            api_key=cfg.litensi_api_key,
-            site=cfg.litensi_site,
-            zone=cfg.litensi_zone,
+        client = PakMailClient(
+            service=getattr(cfg, "pakmail_service", "server-1") or "server-1",
+            domain=getattr(cfg, "pakmail_domain", "") or "",
+            domain_whitelist=getattr(cfg, "pakmail_domain_whitelist", "") or "",
+            domain_blacklist=getattr(cfg, "pakmail_domain_blacklist", "") or "",
         )
-        _append_log(f"[*] resend: reordering mailbox {email}")
-        data = client.reorder(email)
-        order_id = str(data.get("order_id") or "")
-        expired_at = str(data.get("expired_at") or "")
-        _set(order_id=order_id, expired_at=expired_at,
+        links = _email_links_all()
+        order_id = str((links.get(email.strip().lower()) or {}).get("order_id") or "")
+        if not order_id:
+            raise RuntimeError("no saved inbox link for this email (email_links.json)")
+        _append_log(f"[*] resend: re-polling inbox for {email}")
+        _set(order_id=order_id, expired_at="",
              message="Waiting for a new code")
-        _append_log(f"[*] resend: window for {email} open until {expired_at or '?'} "
-                    f"(order {order_id})")
         code = client.wait_for_code(
             order_id, email=email, timeout=RESEND_TIMEOUT_SEC,
             log=_append_log, cancel_cb=stop_event.is_set,
@@ -840,12 +821,12 @@ class ResendBody(BaseModel):
 async def api_accounts_resend(
     body: ResendBody, x_access_key: Optional[str] = Header(None)
 ) -> Dict[str, Any]:
-    """Reopen the mailbox window (Litensi reorder) and wait for a new code.
+    """Re-poll the PakMail inbox and wait for a new code.
 
     Runs in a background thread because polling can take up to
     RESEND_TIMEOUT_SEC; the client watches /api/accounts/resend-status and the
-    live log. Reorder needs no stored metadata: api_id/api_key/site come from
-    config, the email from the accounts file.
+    live log. PakMail is stateless so there is no reorder — the saved inbox
+    link (email_links.json) is polled again.
     """
     _require_auth(x_access_key)
     email = _find_account_email(body.email)

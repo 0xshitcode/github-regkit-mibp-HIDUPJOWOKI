@@ -206,12 +206,12 @@ def _warn_if_warp_ip(cfg=None, log=print) -> None:
     URL — so the exit-IP check reflects the actual traffic path.
     """
     # proxy info first — resolve the sticky URL that _browser_ctx_options uses
-    if cfg is not None and (cfg.proxy or "").strip():
+    if cfg is not None and (getattr(cfg, "nextproxy_api_key", "") or "").strip():
         from urllib.parse import urlsplit as _us
 
-        from github_register.runner import _ensure_sticky_proxy, _socks_exit_ip
+        from github_register.runner import _ensure_sticky_proxy, _pick_proxy_url, _socks_exit_ip
 
-        effective = _ensure_sticky_proxy(cfg.proxy, log=log)
+        effective = _ensure_sticky_proxy(_pick_proxy_url(cfg, log=log), log=log)
         p = _us(effective.strip())
         masked = f"{p.scheme}://{p.hostname}:{p.port or ''}"
         log(f"[*] browser will run via proxy: {masked}")
@@ -228,7 +228,7 @@ def _warn_if_warp_ip(cfg=None, log=print) -> None:
         with urllib.request.urlopen("http://ip-api.com/json/?fields=query,isp", timeout=8) as r:
             data = json.loads(r.read().decode())
         ip, isp = str(data.get("query") or "?"), str(data.get("isp") or "?")
-        if cfg is not None and (cfg.proxy or "").strip():
+        if cfg is not None and (getattr(cfg, "nextproxy_api_key", "") or "").strip():
             log(f"[*] direct (no-proxy) IP: {ip} ({isp}) — local reference only")
         else:
             log(f"[*] exit IP: {ip} ({isp})")

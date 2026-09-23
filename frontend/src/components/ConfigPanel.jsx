@@ -1,207 +1,77 @@
 import React, { useEffect, useState } from "react";
-import { Search, Save, Mail, Shield, X, RefreshCw } from "lucide-react";
+import { Save, Mail, Shield, RefreshCw } from "lucide-react";
 import { api } from "../api.js";
 import { Button, Card, Input, Spinner } from "./ui.jsx";
 
 /* ───────────────────── fields ───────────────────── */
 
-const MAILCX_FIELDS = [
-  {
-    key: "mailcx_domain",
-    label: "Mail.cx Domain",
-    group: "Mail Provider",
-    hasDomainDropdown: true,
-  },
+const PAKMAIL_FIELDS = [
+  { key: "pakmail_domain", label: "Fixed domain (blank = auto)", group: "Mail Provider", wide: true },
+  { key: "pakmail_domain_whitelist", label: "Domain whitelist (csv)", group: "Mail Provider", wide: true },
+  { key: "pakmail_domain_blacklist", label: "Domain blacklist (csv)", group: "Mail Provider", wide: true },
 ];
 
-const LITENSI_FIELDS = [
-  { key: "litensi_api_id", label: "Litensi API ID", group: "Mail Provider" },
-  {
-    key: "litensi_api_key",
-    label: "Litensi API Key",
-    secret: true,
-    group: "Mail Provider",
-    wide: true,
-  },
-  {
-    key: "litensi_site",
-    label: "Site (e.g. github.com)",
-    group: "Mail Provider",
-  },
-  {
-    key: "litensi_zone",
-    label: "Zone (blank = auto cheapest)",
-    group: "Mail Provider",
-    hasZoneChecker: true,
-    wide: true,
-  },
+const NEXTPROXY_FIELDS = [
+  { key: "nextproxy_api_key", label: "NextProxy API Key", secret: true, group: "Proxy", wide: true },
+  { key: "nextproxy_country", label: "Country filter (e.g. US, DE — blank = any)", group: "Proxy" },
+  { key: "nextproxy_limit", label: "Pool size per fetch", type: "number", group: "Proxy" },
+  { key: "nextproxy_max_latency", label: "Max latency ms (0 = off)", type: "number", group: "Proxy" },
 ];
 
 const REG_FIELDS = [
-  {
-    key: "register_count",
-    label: "Register Count",
-    type: "number",
-    group: "Registration",
-  },
-  {
-    key: "delay_sec",
-    label: "Delay between accounts (seconds)",
-    type: "number",
-    group: "Registration",
-  },
-  {
-    key: "max_username_tries",
-    label: "Max username tries",
-    type: "number",
-    group: "Registration",
-  },
-  {
-    key: "otp_timeout_sec",
-    label: "OTP timeout (seconds)",
-    type: "number",
-    group: "Registration",
-  },
-  {
-    key: "proxy",
-    label: "Proxy (http/socks://user:pass@host:port)",
-    secret: true,
-    group: "Registration",
-    wide: true,
-    isProxyField: true,
-  },
-  {
-    key: "headless",
-    label: "Headless (no browser window, less stable)",
-    type: "checkbox",
-    group: "Registration",
-    wide: true,
-  },
+  { key: "register_count", label: "Register Count", type: "number", group: "Registration" },
+  { key: "delay_sec", label: "Delay between accounts (seconds)", type: "number", group: "Registration" },
+  { key: "max_username_tries", label: "Max username tries", type: "number", group: "Registration" },
+  { key: "otp_timeout_sec", label: "OTP timeout (seconds)", type: "number", group: "Registration" },
+  { key: "headless", label: "Headless (no browser window, less stable)", type: "checkbox", group: "Registration", wide: true },
 ];
 
 const ADV_FIELDS = [
-  {
-    key: "browser_profile_dir",
-    label: "Browser profile dir (DataDome trust)",
-    group: "Advanced",
-    wide: true,
-  },
-  {
-    key: "proxy_hard_block_retries",
-    label: "Proxy retries after DataDome hard block",
-    type: "number",
-    group: "Advanced",
-  },
-  {
-    key: "proxy_rate_limit_retries",
-    label: "IP rotation/retries after rate limit",
-    type: "number",
-    group: "Advanced",
-  },
-  {
-    key: "fresh_profile",
-    label:
-      "Fresh browser per account (incognito-like with cloned DataDome cookie)",
-    type: "checkbox",
-    group: "Advanced",
-    wide: true,
-  },
+  { key: "browser_profile_dir", label: "Browser profile dir (DataDome trust)", group: "Advanced", wide: true },
+  { key: "proxy_hard_block_retries", label: "Proxy retries after DataDome hard block", type: "number", group: "Advanced" },
+  { key: "proxy_rate_limit_retries", label: "IP rotation/retries after rate limit", type: "number", group: "Advanced" },
+  { key: "fresh_profile", label: "Fresh browser per account (incognito-like with cloned DataDome cookie)", type: "checkbox", group: "Advanced", wide: true },
 ];
 
 const POST_FIELDS = [
   { key: "repo_name", label: "Repository name", group: "Post-Signup Stages" },
-  {
-    key: "create_repo",
-    label: "Create first repository after signup",
-    type: "checkbox",
-    group: "Post-Signup Stages",
-    wide: true,
-  },
-  {
-    key: "enable_2fa",
-    label: "Enable TOTP 2FA and save secret",
-    type: "checkbox",
-    group: "Post-Signup Stages",
-    wide: true,
-  },
-  {
-    key: "set_profile_status",
-    label: "Set profile status after 2FA",
-    type: "checkbox",
-    group: "Post-Signup Stages",
-    wide: true,
-  },
-  {
-    key: "profile_status",
-    label: "Profile status (blank = On vacation)",
-    group: "Post-Signup Stages",
-  },
-  {
-    key: "complete_profile",
-    label: "Complete name, bio, and location after 2FA",
-    type: "checkbox",
-    group: "Post-Signup Stages",
-    wide: true,
-  },
-  {
-    key: "profile_name",
-    label: "Profile name (blank = Random User)",
-    group: "Post-Signup Stages",
-  },
-  {
-    key: "profile_location",
-    label: "Profile location (blank = Random User)",
-    group: "Post-Signup Stages",
-  },
-  {
-    key: "profile_bio",
-    label: "Profile bio (blank = ZenQuotes)",
-    group: "Post-Signup Stages",
-    wide: true,
-  },
+  { key: "create_repo", label: "Create first repository after signup", type: "checkbox", group: "Post-Signup Stages", wide: true },
+  { key: "enable_2fa", label: "Enable TOTP 2FA and save secret", type: "checkbox", group: "Post-Signup Stages", wide: true },
+  { key: "set_profile_status", label: "Set profile status after 2FA", type: "checkbox", group: "Post-Signup Stages", wide: true },
+  { key: "profile_status", label: "Profile status (blank = On vacation)", group: "Post-Signup Stages" },
+  { key: "complete_profile", label: "Complete name, bio, and location after 2FA", type: "checkbox", group: "Post-Signup Stages", wide: true },
+  { key: "profile_name", label: "Profile name (blank = Random User)", group: "Post-Signup Stages" },
+  { key: "profile_bio", label: "Profile bio (blank = ZenQuotes)", group: "Post-Signup Stages" },
+  { key: "profile_location", label: "Profile location (blank = Random User)", group: "Post-Signup Stages" },
 ];
 
-const GROUP_COLUMN = {
-  "Mail Provider": "left",
-  Registration: "left",
-  Advanced: "right",
-  "Post-Signup Stages": "right",
-};
-
-/* ───────────────────── main component ───────────────────── */
+const PAKMAIL_SERVICES = ["server-1", "server-2", "server-3", "gmail"];
+const PROXY_TYPES = ["socks5", "https", "socks4", "all"];
 
 export default function ConfigPanel() {
   const [cfg, setCfg] = useState(null);
-  const [configError, setConfigError] = useState("");
   const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
-
-  // zone-check modal
-  const [zoneOpen, setZoneOpen] = useState(false);
-  const [zoneLoading, setZoneLoading] = useState(false);
-  const [zoneData, setZoneData] = useState(null);
-  const [zoneError, setZoneError] = useState("");
-
-  // mailcx domains
-  const [mailcxDomains, setMailcxDomains] = useState([]);
+  const [configError, setConfigError] = useState("");
+  const [domains, setDomains] = useState([]);
+  const [poolOpen, setPoolOpen] = useState(false);
+  const [poolLoading, setPoolLoading] = useState(false);
+  const [poolData, setPoolData] = useState(null);
+  const [poolError, setPoolError] = useState("");
 
   useEffect(() => {
-    api
-      .get("/api/config")
-      .then((d) => {
-        setCfg(d.config);
-        setConfigError("");
-      })
+    api.get("/api/config").then((d) => { setCfg(d.config); setConfigError(""); })
       .catch((error) => setConfigError(error.message || "Configuration could not be loaded"));
   }, []);
 
-  // fetch mail.cx domains on mount
-  useEffect(() => {
-    api
-      .post("/api/mailcx/domains", {})
-      .then((d) => setMailcxDomains(d.domains || []))
-      .catch(() => {});
-  }, []);
+  useEffect(() => { if (cfg) refreshDomains(cfg.pakmail_service || "server-1"); }, [cfg?.pakmail_service]);
+
+  async function refreshDomains(service) {
+    try {
+      const d = await api.post("/api/pakmail/domains", { pakmail_service: service });
+      setDomains(d.domains || []);
+    } catch { /* offline — manual entry still works */ }
+  }
 
   if (configError)
     return (
@@ -211,33 +81,24 @@ export default function ConfigPanel() {
         <Button onClick={() => window.location.reload()}>Retry</Button>
       </Card>
     );
+  if (!cfg) return (<div className="panel-state"><Spinner /> <span>Loading configuration</span></div>);
 
-  if (!cfg)
-    return (
-      <div className="panel-state"><Spinner /> <span>Loading configuration</span></div>
-    );
-
-  const provider = cfg.mail_provider || "mailcx";
-
-  function set(key, value) {
-    setCfg((c) => ({ ...c, [key]: value }));
-    setSaved("");
-  }
+  function set(key, value) { setCfg((c) => ({ ...c, [key]: value })); setSaved(""); }
 
   async function save() {
     setBusy(true);
     try {
       const patch = {
-        mail_provider: provider,
-        mailcx_domain: cfg.mailcx_domain ?? "",
-        litensi_api_id: cfg.litensi_api_id ?? "",
-        litensi_api_key: cfg.litensi_api_key ?? "",
-        litensi_site: cfg.litensi_site ?? "",
-        litensi_zone: cfg.litensi_zone ?? "",
-        proxy_file: cfg.proxy_file ?? "",
+        pakmail_service: cfg.pakmail_service ?? "server-1",
+        pakmail_domain: cfg.pakmail_domain ?? "",
+        pakmail_domain_whitelist: cfg.pakmail_domain_whitelist ?? "",
+        pakmail_domain_blacklist: cfg.pakmail_domain_blacklist ?? "",
+        nextproxy_api_key: cfg.nextproxy_api_key ?? "",
+        nextproxy_type: cfg.nextproxy_type ?? "socks5",
+        nextproxy_country: cfg.nextproxy_country ?? "",
       };
-      // collect fields from each group
-      for (const f of [...REG_FIELDS, ...ADV_FIELDS, ...POST_FIELDS]) {
+      for (const f of [...NEXTPROXY_FIELDS, ...REG_FIELDS, ...ADV_FIELDS, ...POST_FIELDS]) {
+        if (patch[f.key] !== undefined) continue;
         if (f.type === "checkbox") patch[f.key] = !!cfg[f.key];
         else if (f.type === "number") patch[f.key] = Number(cfg[f.key] ?? 0);
         else patch[f.key] = cfg[f.key] ?? "";
@@ -245,197 +106,102 @@ export default function ConfigPanel() {
       const d = await api.put("/api/config", patch);
       setCfg(d.config);
       setSaved("Configuration saved");
-    } catch (e) {
-      setSaved(e.message);
-    } finally {
-      setBusy(false);
-    }
+    } catch (e) { setSaved(e.message); }
+    finally { setBusy(false); }
   }
 
-  async function checkZones() {
-    setZoneOpen(true);
-    setZoneLoading(true);
-    setZoneError("");
-    setZoneData(null);
+  async function checkPool() {
+    setPoolOpen(true); setPoolLoading(true); setPoolError(""); setPoolData(null);
     try {
-      const d = await api.post("/api/litensi/zones", {
-        litensi_api_id: String(cfg.litensi_api_id ?? ""),
-        litensi_api_key: String(cfg.litensi_api_key ?? ""),
-        litensi_site: String(cfg.litensi_site ?? ""),
+      const d = await api.post("/api/nextproxy/pool", {
+        nextproxy_type: cfg.nextproxy_type ?? "socks5",
+        nextproxy_country: cfg.nextproxy_country ?? "",
+        nextproxy_limit: Number(cfg.nextproxy_limit ?? 20),
       });
-      setZoneData(d);
-    } catch (e) {
-      setZoneError(e.message || "Unable to retrieve zone list");
-    } finally {
-      setZoneLoading(false);
-    }
+      setPoolData(d);
+    } catch (e) { setPoolError(e.message || "Unable to fetch pool"); }
+    finally { setPoolLoading(false); }
   }
-
-  function useZone(zone) {
-    set("litensi_zone", zone);
-    setZoneOpen(false);
-  }
-
-  // build mail provider card fields based on provider
-  const providerFields =
-    provider === "litensi" ? LITENSI_FIELDS : MAILCX_FIELDS;
-
-  const leftGroups = ["Mail Provider", "Registration"];
-  const rightGroups = ["Advanced", "Post-Signup Stages"];
 
   return (
     <div style={styles.wrap} className="config-layout">
       <div style={styles.columns} className="cfg-columns">
         <div style={styles.col}>
-          {/* ── Mail Provider card ── */}
           <Card style={styles.card}>
-            <div style={styles.groupTitle}>Mail Provider</div>
-
-            {/* radio toggle */}
-            <div style={styles.providerRow}>
-              <label style={styles.radioLabel}>
-                <input
-                  type="radio"
-                  name="mail_provider"
-                  value="mailcx"
-                  checked={provider === "mailcx"}
-                  onChange={() => set("mail_provider", "mailcx")}
-                  style={styles.radio}
-                />
-                <Mail
-                  size={16}
-                  style={{
-                    color:
-                      provider === "mailcx" ? "var(--accent)" : "var(--muted)",
-                  }}
-                />
-                <span
-                  style={{
-                    color:
-                      provider === "mailcx" ? "var(--text)" : "var(--muted)",
-                  }}
-                >
-                  Mail.cx <span style={styles.badge}>Free</span>
-                </span>
-              </label>
-              <label style={styles.radioLabel}>
-                <input
-                  type="radio"
-                  name="mail_provider"
-                  value="litensi"
-                  checked={provider === "litensi"}
-                  onChange={() => set("mail_provider", "litensi")}
-                  style={styles.radio}
-                />
-                <Shield
-                  size={16}
-                  style={{
-                    color:
-                      provider === "litensi" ? "var(--accent)" : "var(--muted)",
-                  }}
-                />
-                <span
-                  style={{
-                    color:
-                      provider === "litensi" ? "var(--text)" : "var(--muted)",
-                  }}
-                >
-                  Litensi <span style={styles.badgePaid}>Paid</span>
-                </span>
-              </label>
-            </div>
-
-            {/* provider-specific fields */}
+            <div style={styles.groupTitle}><Mail size={15} /> PakMail <span style={styles.badge}>Free</span></div>
             <div style={styles.fieldsGrid} className="cfg-fields">
-              {provider === "litensi" ? (
-                LITENSI_FIELDS.map((f) => (
-                  <div
-                    key={f.key}
-                    style={f.wide ? styles.fieldWide : styles.fieldHalf}
-                    className={f.wide ? "cfg-field-wide" : "cfg-field-half"}
-                  >
-                    <Field
-                      f={f}
-                      value={cfg[f.key]}
-                      onChange={(v) => set(f.key, v)}
-                      onCheckZones={f.hasZoneChecker ? checkZones : null}
-                    />
-                  </div>
-                ))
-              ) : (
-                <>
-                  <div style={styles.fieldWide} className="cfg-field-wide">
-                    <label style={styles.field}>
-                      <span style={styles.label}>Mail.cx Domain</span>
-                      <select
-                        style={styles.select}
-                        value={cfg.mailcx_domain || ""}
-                        onChange={(e) => set("mailcx_domain", e.target.value)}
-                      >
-                        <option value="">Auto (random from available)</option>
-                        {mailcxDomains.map((d) => (
-                          <option key={d} value={d}>
-                            {d}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                </>
-              )}
+              <div style={styles.fieldWide} className="cfg-field-wide">
+                <label style={styles.field}>
+                  <span style={styles.label}>Service</span>
+                  <select style={styles.select} value={cfg.pakmail_service || "server-1"}
+                    onChange={(e) => set("pakmail_service", e.target.value)}>
+                    {PAKMAIL_SERVICES.map((s) => (<option key={s} value={s}>{s}</option>))}
+                  </select>
+                </label>
+              </div>
+              <div style={styles.fieldWide} className="cfg-field-wide">
+                <label style={styles.field}>
+                  <span style={styles.label}>Domain (blank = auto-pick)</span>
+                  <select style={styles.select} value={cfg.pakmail_domain || ""}
+                    onChange={(e) => set("pakmail_domain", e.target.value)}>
+                    <option value="">Auto (random from available)</option>
+                    {domains.map((d) => (<option key={d} value={d}>{d}</option>))}
+                    {(cfg.pakmail_domain && !domains.includes(cfg.pakmail_domain)) && (
+                      <option value={cfg.pakmail_domain}>{cfg.pakmail_domain}</option>
+                    )}
+                  </select>
+                </label>
+              </div>
+              {PAKMAIL_FIELDS.map((f) => (
+                <div key={f.key} style={styles.fieldWide} className="cfg-field-wide">
+                  <Field f={f} value={cfg[f.key]} onChange={(v) => set(f.key, v)} />
+                </div>
+              ))}
             </div>
-
           </Card>
-
-          {/* ── Registration card ── */}
-          <GroupCard
-            name="Registration"
-            fields={REG_FIELDS}
-            cfg={cfg}
-            set={set}
-          />
+          <Card style={styles.card}>
+            <div style={styles.groupTitle}><Shield size={15} /> NextProxy <span style={styles.badge}>Live</span></div>
+            <div style={styles.fieldsGrid} className="cfg-fields">
+              <div style={styles.fieldWide} className="cfg-field-wide">
+                <label style={styles.field}>
+                  <span style={styles.label}>Protocol</span>
+                  <select style={styles.select} value={cfg.nextproxy_type || "socks5"}
+                    onChange={(e) => set("nextproxy_type", e.target.value)}>
+                    {PROXY_TYPES.map((s) => (<option key={s} value={s}>{s}</option>))}
+                  </select>
+                </label>
+              </div>
+              {NEXTPROXY_FIELDS.map((f) => (
+                <div key={f.key} style={f.wide ? styles.fieldWide : styles.fieldHalf}
+                  className={f.wide ? "cfg-field-wide" : "cfg-field-half"}>
+                  <Field f={f} value={cfg[f.key]} onChange={(v) => set(f.key, v)} />
+                </div>
+              ))}
+              <div style={styles.fieldWide} className="cfg-field-wide">
+                <Button variant="outline" onClick={checkPool} disabled={poolLoading}>
+                  <RefreshCw size={14} /> {poolLoading ? "Fetching..." : "Test live pool"}
+                </Button>
+              </div>
+            </div>
+          </Card>
+          <GroupCard name="Registration" fields={REG_FIELDS} cfg={cfg} set={set} />
         </div>
-
         <div style={styles.col}>
           <GroupCard name="Advanced" fields={ADV_FIELDS} cfg={cfg} set={set} />
-          <GroupCard
-            name="Post-Signup Stages"
-            fields={POST_FIELDS}
-            cfg={cfg}
-            set={set}
-          />
+          <GroupCard name="Post-Signup Stages" fields={POST_FIELDS} cfg={cfg} set={set} />
         </div>
       </div>
-
       <Card style={styles.saveBar} className="cfg-savebar">
         <Button variant="primary" size="lg" onClick={save} disabled={busy}>
-          <Save size={16} />
           {busy ? "Saving..." : "Save configuration"}
         </Button>
         {saved && (
-          <span
-            style={{
-              fontSize: 13,
-              color: saved === "Configuration saved" ? "var(--ok)" : "var(--danger)",
-            }}
-          >
-            {saved}
-          </span>
+          <span style={{ fontSize: 13, color: saved === "Configuration saved" ? "var(--ok)" : "var(--danger)" }}>{saved}</span>
         )}
       </Card>
-
-      {zoneOpen && (
-        <ZoneModal
-          loading={zoneLoading}
-          error={zoneError}
-          data={zoneData}
-          currentZone={cfg.litensi_zone ?? ""}
-          onClose={() => setZoneOpen(false)}
-          onUse={useZone}
-          onRefresh={checkZones}
-        />
+      {poolOpen && (
+        <PoolModal loading={poolLoading} error={poolError} data={poolData} onClose={() => setPoolOpen(false)} onRefresh={checkPool} />
       )}
-
       <style>{layoutCSS}</style>
     </div>
   );
@@ -449,16 +215,9 @@ function GroupCard({ name, fields, cfg, set }) {
       <div style={styles.groupTitle}>{name}</div>
       <div style={styles.fieldsGrid} className="cfg-fields">
         {fields.map((f) => (
-          <div
-            key={f.key}
-            style={f.wide ? styles.fieldWide : styles.fieldHalf}
-            className={f.wide ? "cfg-field-wide" : "cfg-field-half"}
-          >
-            {f.isProxyField ? (
-              <ProxyField f={f} cfg={cfg} set={set} />
-            ) : (
-              <Field f={f} value={cfg[f.key]} onChange={(v) => set(f.key, v)} />
-            )}
+          <div key={f.key} style={f.wide ? styles.fieldWide : styles.fieldHalf}
+            className={f.wide ? "cfg-field-wide" : "cfg-field-half"}>
+            <Field f={f} value={cfg[f.key]} onChange={(v) => set(f.key, v)} />
           </div>
         ))}
       </div>
@@ -466,604 +225,79 @@ function GroupCard({ name, fields, cfg, set }) {
   );
 }
 
-function ProxyField({ f, cfg, set }) {
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-  const [poolCount, setPoolCount] = useState(null);
-  const [msgError, setMsgError] = useState(false);
-  const mode = cfg.proxy_file ? "file" : "url";
-
-  async function onPick(e) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    setBusy(true);
-    setMsg("");
-    setMsgError(false);
-    try {
-      const d = await api.upload("/api/proxy/upload", file);
-      set("proxy_file", d.proxy_file);
-      setPoolCount(d.count);
-      setMsg(`${d.count} proxies loaded`);
-      setMsgError(false);
-    } catch (err) {
-      setMsg(err.message);
-      setMsgError(true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const status =
-    msg ||
-    ((poolCount ?? cfg.proxy_file_count ?? 0) > 0
-      ? `${poolCount ?? cfg.proxy_file_count} proxies in ${cfg.proxy_file}`
-      : "");
-
-  return (
-    <label style={styles.field}>
-      <span style={styles.label}>{f.label}</span>
-      <div style={{ ...styles.providerRow, marginBottom: 8 }}>
-        <label style={styles.radioLabel}>
-          <input
-            type="radio"
-            name="proxy_mode"
-            checked={mode === "url"}
-            onChange={() => {
-              set("proxy_file", "");
-              setMsg("");
-              setPoolCount(null);
-            }}
-            style={styles.radio}
-          />
-          <span
-            style={{
-              color: mode === "url" ? "var(--text)" : "var(--muted)",
-              fontSize: 13,
-            }}
-          >
-            URL (single)
-          </span>
-        </label>
-        <label style={styles.radioLabel}>
-          <input
-            type="radio"
-            name="proxy_mode"
-            checked={mode === "file"}
-            onChange={() => set("proxy_file", "proxies.txt")}
-            style={styles.radio}
-          />
-          <span
-            style={{
-              color: mode === "file" ? "var(--text)" : "var(--muted)",
-              fontSize: 13,
-            }}
-          >
-            File (rotated per account)
-          </span>
-        </label>
-      </div>
-      {mode === "file" ? (
-        <>
-          <input
-            type="file"
-            accept=".txt,text/plain"
-            disabled={busy}
-            onChange={onPick}
-            style={{ fontSize: 13, color: "var(--muted)" }}
-          />
-          {status && (
-            <span
-              style={{
-                fontSize: 12.5,
-                color: msgError ? "var(--danger)" : "var(--ok)",
-              }}
-            >
-              {status}
-            </span>
-          )}
-        </>
-      ) : (
-        <Input
-          type="text"
-          value={cfg.proxy ?? ""}
-          onChange={(e) => set("proxy", e.target.value)}
-          placeholder="http://user:pass@host:port"
-          style={{ width: "100%" }}
-        />
-      )}
-    </label>
-  );
-}
-
-function Field({ f, value, onChange, onCheckZones }) {
+function Field({ f, value, onChange }) {
   if (f.type === "checkbox") {
     return (
-      <label
-        style={{
-          ...styles.field,
-          flexDirection: "row",
-          alignItems: "center",
-          gap: 10,
-          minHeight: 44,
-          cursor: "pointer",
-        }}
-      >
-        <Input
-          type="checkbox"
-          checked={!!value}
-          onChange={(e) => onChange(e.target.checked)}
-          style={{ width: 18, height: 18, flex: "none", accentColor: "var(--accent)" }}
-        />
-        <span style={{ fontSize: 13, color: "var(--text)" }}>{f.label}</span>
+      <label style={{ ...styles.field, flexDirection: "row", alignItems: "center", gap: 10, minHeight: 44, cursor: "pointer" }}>
+        <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} style={{ width: 18, height: 18 }} />
+        <span style={{ fontSize: 13.5 }}>{f.label}</span>
+      </label>
+    );
+  }
+  if (f.type === "number") {
+    return (
+      <label style={styles.field}>
+        <span style={styles.label}>{f.label}</span>
+        <Input type="number" value={value ?? 0} onChange={(e) => onChange(e.target.value)} style={{ width: "100%" }} />
       </label>
     );
   }
   return (
     <label style={styles.field}>
       <span style={styles.label}>{f.label}</span>
-      <div style={styles.inputRow}>
-        <Input
-          type={f.type === "number" ? "number" : "text"}
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-          style={{ flex: 1, minWidth: 0 }}
-        />
-        {onCheckZones && (
-          <Button
-            type="button"
-            onClick={onCheckZones}
-            title="Retrieve Litensi zones"
-          >
-            <Search size={15} /> Zones
-          </Button>
-        )}
-      </div>
+      <Input type={f.secret ? "password" : "text"} value={value ?? ""} onChange={(e) => onChange(e.target.value)} style={{ width: "100%" }} />
     </label>
   );
 }
 
-function ZoneModal({
-  loading,
-  error,
-  data,
-  currentZone,
-  onClose,
-  onUse,
-  onRefresh,
-}) {
-  const [query, setQuery] = useState("");
-  const allZones = (data?.zones || []).slice().sort((a, b) => {
-    const sa = a.stock > 0 ? 0 : 1;
-    const sb = b.stock > 0 ? 0 : 1;
-    if (sa !== sb) return sa - sb;
-    return a.price - b.price;
-  });
-  const needle = query.trim().toLowerCase();
-  const zones = needle
-    ? allZones.filter((z) => (z.zone || "").toLowerCase().includes(needle))
-    : allZones;
-
+function PoolModal({ loading, error, data, onClose, onRefresh }) {
   return (
-    <div style={styles.modalBackdrop} onClick={onClose}>
-      <div
-        className="glass"
-        style={styles.modal}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div style={styles.modalHead}>
-          <div>
-            <div style={styles.modalTitle}>Litensi Zones</div>
-            <div style={styles.modalSub}>
-              {data?.site ? (
-                <>
-                  Site: <b style={{ color: "var(--text)" }}>{data.site}</b>
-                </>
-              ) : (
-                "Available zones"
-              )}
+    <div className="ui-dialog-backdrop" onMouseDown={onClose}>
+      <div className="ui-dialog" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
+        <div style={styles.modalTitle}>NextProxy Live Pool</div>
+        {loading && (<div className="panel-state"><Spinner /> <span>Fetching...</span></div>)}
+        {error && <div style={{ color: "var(--danger)", fontSize: 13 }}>{error}</div>}
+        {data && (
+          <>
+            <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>
+              {data.count} usable proxies
+              {data.credits_remaining ? ` · credits: ${data.credits_remaining}` : ""}
             </div>
-          </div>
-          <button
-            className="glass-btn"
-            onClick={onClose}
-            style={{ padding: "6px 12px" }}
-            aria-label="Close zone list"
-          >
-            <X size={15} />
-          </button>
-        </div>
-
-        <div style={styles.modalBody}>
-          {loading && <div style={styles.center}>Loading zones...</div>}
-          {!loading && error && (
-            <div style={styles.errorBox}>
-              <div
-                style={{
-                  color: "var(--danger)",
-                  fontWeight: 600,
-                  marginBottom: 6,
-                }}
-              >
-                  Failed
-              </div>
-              <div
-                style={{
-                  fontSize: 12.5,
-                  color: "var(--muted)",
-                  wordBreak: "break-word",
-                }}
-              >
-                {error}
-              </div>
-            </div>
-          )}
-          {!loading && !error && allZones.length === 0 && (
-            <div style={styles.center}>No zones available.</div>
-          )}
-          {!loading && !error && allZones.length > 0 && (
-            <>
-              <Input
-                autoFocus
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search zone"
-                aria-label="Search zone"
-                style={styles.searchInput}
-              />
-              <div style={styles.legend}>
-                <span>
-                  Total: <b>{zones.length}</b>
-                </span>
-                <span style={{ color: "var(--ok)" }}>
-                  Available: <b>{zones.filter((z) => z.stock > 0).length}</b>
-                </span>
-                {data.cheapest && (
-                  <span style={{ color: "var(--accent)" }}>
-                    Cheapest: <b>{data.cheapest}</b>
-                  </span>
-                )}
-              </div>
-              {zones.length === 0 ? (
-                <div style={styles.center}>
-                  No zones match "{query.trim()}".
+            <div style={{ maxHeight: 320, overflow: "auto", fontSize: 12.5, fontFamily: "monospace" }}>
+              {(data.proxies || []).map((p, i) => (
+                <div key={i} style={{ padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
+                  {p.ip}:{p.port} · {p.protocol} · {p.country} · {p.latency}ms
                 </div>
-              ) : (
-              <div style={styles.tableWrap}>
-                <table style={styles.table}>
-                  <thead>
-                    <tr>
-                      <th style={styles.th}>Zone</th>
-                      <th style={{ ...styles.th, textAlign: "right" }}>
-                        Price
-                      </th>
-                      <th style={{ ...styles.th, textAlign: "right" }}>
-                        Stock
-                      </th>
-                      <th style={styles.th}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {zones.map((z) => {
-                      const isCurrent = currentZone === z.zone;
-                      const isCheapest = data.cheapest === z.zone;
-                      const outOfStock = z.stock <= 0;
-                      return (
-                        <tr
-                          key={z.zone}
-                          style={outOfStock ? { opacity: 0.5 } : undefined}
-                        >
-                          <td style={styles.td}>
-                            <div style={styles.zoneCell}>
-                              <span style={{ fontWeight: 700 }}>
-                                  {z.zone || "-"}
-                              </span>
-                              {isCurrent && (
-                                <span
-                                  className="badge accent"
-                                  style={styles.tag}
-                                >
-                                  current
-                                </span>
-                              )}
-                              {isCheapest && !isCurrent && (
-                                <span
-                                  className="badge accent"
-                                  style={styles.tag}
-                                >
-                                  cheapest
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td
-                            style={{
-                              ...styles.td,
-                              textAlign: "right",
-                              fontVariantNumeric: "tabular-nums",
-                            }}
-                          >
-                            {formatPrice(z.price)}
-                          </td>
-                          <td
-                            style={{
-                              ...styles.td,
-                              textAlign: "right",
-                              fontVariantNumeric: "tabular-nums",
-                            }}
-                          >
-                            <span
-                              style={{
-                                color: outOfStock
-                                  ? "var(--danger)"
-                                  : "var(--ok)",
-                                fontWeight: 600,
-                              }}
-                            >
-                              {formatPrice(Math.round(z.stock))}
-                            </span>
-                          </td>
-                          <td style={{ ...styles.td, textAlign: "right" }}>
-                            <button
-                              className="glass-btn"
-                              disabled={outOfStock}
-                              onClick={() => onUse(z.zone)}
-                              style={{ padding: "6px 12px", fontSize: 12 }}
-                            >
-                              Use
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              )}
-            </>
-          )}
-        </div>
-
-        <div style={styles.modalFoot}>
-          <button className="glass-btn" onClick={onRefresh} disabled={loading}>
-            <RefreshCw size={15} /> Refresh
-          </button>
-          {!loading && !error && allZones.length > 0 && (
-            <button
-              className="glass-btn primary"
-              onClick={() => onUse("")}
-              title="Clear zone, auto cheapest"
-            >
-              Clear (automatic)
-            </button>
-          )}
-          <div style={{ flex: 1 }} />
-          <button className="glass-btn" onClick={onClose}>
-            Close
-          </button>
+              ))}
+            </div>
+          </>
+        )}
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <Button variant="outline" onClick={onRefresh}>Refresh</Button>
+          <Button variant="primary" onClick={onClose}>Close</Button>
         </div>
       </div>
     </div>
   );
 }
 
-function formatPrice(n) {
-  if (!Number.isFinite(n)) return "-";
-  try {
-    return new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(
-      n,
-    );
-  } catch {
-    return String(n);
-  }
-}
-
-/* ───────────────────── styles ───────────────────── */
-
 const styles = {
-  wrap: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 14,
-    maxWidth: 1200,
-    width: "100%",
-    margin: "0 auto",
-  },
-  columns: {
-    display: "grid",
-    gridTemplateColumns: "1fr",
-    gap: 14,
-    alignItems: "start",
-  },
-  col: { display: "flex", flexDirection: "column", gap: 14, minWidth: 0 },
-  card: { padding: 22, minWidth: 0 },
-  groupTitle: {
-    fontSize: 11.5,
-    fontWeight: 700,
-    letterSpacing: 1.2,
-    textTransform: "uppercase",
-    color: "var(--text-muted)",
-    marginBottom: 16,
-  },
-  fieldsGrid: { display: "grid", gap: "14px 16px" },
-  fieldHalf: { minWidth: 0 },
-  fieldWide: { minWidth: 0 },
-  field: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 7,
-    fontSize: 13,
-    color: "var(--muted)",
-  },
-  label: { fontWeight: 500 },
-  inputRow: {
-    display: "flex",
-    gap: 8,
-    alignItems: "stretch",
-    flexWrap: "wrap",
-  },
-  select: {
-    flex: 1,
-    minWidth: 0,
-    padding: "10px 12px",
-    fontSize: 13,
-    background: "var(--bg-input)",
-    color: "var(--text)",
-    border: "1px solid var(--border)",
-    borderRadius: 8,
-    outline: "none",
-    cursor: "pointer",
-  },
-  saveBar: {
-    padding: 18,
-    display: "flex",
-    alignItems: "center",
-    gap: 14,
-    position: "sticky",
-    bottom: 0,
-    flexWrap: "wrap",
-    zIndex: 5,
-  },
-  providerRow: {
-    display: "flex",
-    gap: 10,
-    marginBottom: 18,
-    flexWrap: "wrap",
-  },
-  radioLabel: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    minHeight: 44,
-    padding: "10px 16px",
-    borderRadius: "var(--radius-control)",
-    cursor: "pointer",
-    border: "1px solid var(--border)",
-    background: "transparent",
-    transition: "border-color 150ms ease-out, color 150ms ease-out",
-    fontSize: 13.5,
-  },
-  radio: { accentColor: "var(--accent)", width: 18, height: 18, flex: "none" },
-  badge: {
-    fontSize: 10,
-    fontWeight: 600,
-    padding: "2px 7px",
-    borderRadius: "var(--radius-control)",
-    border: "1px solid rgba(var(--success-rgb), 0.35)",
-    color: "var(--success)",
-    marginLeft: 4,
-  },
-  badgePaid: {
-    fontSize: 10,
-    fontWeight: 600,
-    padding: "2px 7px",
-    borderRadius: "var(--radius-control)",
-    border: "1px solid rgba(var(--accent-rgb), 0.35)",
-    color: "var(--accent-text)",
-    marginLeft: 4,
-  },
-  // modal
-  modalBackdrop: {
-    position: "fixed",
-    inset: 0,
-    zIndex: 100,
-    background: "rgba(0,0,0,0.72)",
-    backdropFilter: "blur(12px)",
-    WebkitBackdropFilter: "blur(12px)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 16,
-  },
-  modal: {
-    width: "100%",
-    maxWidth: 640,
-    maxHeight: "85vh",
-    display: "flex",
-    flexDirection: "column",
-    padding: 0,
-    overflow: "hidden",
-  },
-  modalHead: {
-    padding: "18px 22px 14px",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 12,
-    borderBottom: "1px solid var(--glass-border)",
-  },
-  modalTitle: { fontSize: 17, fontWeight: 800, letterSpacing: -0.3 },
-  modalSub: { fontSize: 12.5, color: "var(--muted)", marginTop: 4 },
-  modalBody: { padding: "16px 22px", overflow: "auto", flex: 1 },
-  modalFoot: {
-    padding: "14px 22px",
-    display: "flex",
-    gap: 10,
-    flexWrap: "wrap",
-    borderTop: "1px solid var(--glass-border)",
-    background: "var(--bg-input)",
-  },
-  center: {
-    textAlign: "center",
-    padding: "32px 12px",
-    color: "var(--muted)",
-    fontSize: 13.5,
-  },
-  errorBox: {
-    padding: "14px 16px",
-    borderRadius: 12,
-    background: "rgba(var(--danger-rgb),0.09)",
-    border: "1px solid rgba(var(--danger-rgb),0.3)",
-  },
-  legend: {
-    display: "flex",
-    gap: 16,
-    flexWrap: "wrap",
-    fontSize: 12.5,
-    color: "var(--muted)",
-    marginBottom: 12,
-  },
-  searchInput: { marginBottom: 10 },
-  tableWrap: { overflowX: "auto", margin: "0 -4px" },
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
-  th: {
-    textAlign: "left",
-    fontWeight: 700,
-    fontSize: 11,
-    color: "var(--muted)",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    padding: "8px 10px",
-    borderBottom: "1px solid var(--glass-border)",
-    position: "sticky",
-    top: 0,
-    background: "var(--bg-card)",
-  },
-  td: {
-    padding: "10px",
-    borderBottom: "1px solid var(--border)",
-    verticalAlign: "middle",
-  },
-  zoneCell: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
-  tag: { fontSize: 10, padding: "2px 8px" },
+  wrap: { display: "flex", flexDirection: "column", gap: 12 },
+  columns: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "start" },
+  col: { display: "flex", flexDirection: "column", gap: 12, minWidth: 0 },
+  card: { padding: 16 },
+  groupTitle: { display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 650, marginBottom: 12 },
+  badge: { fontSize: 11, padding: "2px 8px", borderRadius: 999, background: "rgba(59,158,255,.15)", color: "var(--accent)" },
+  fieldsGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
+  fieldWide: { gridColumn: "1 / -1" },
+  fieldHalf: {},
+  field: { display: "flex", flexDirection: "column", gap: 6 },
+  label: { fontSize: 12.5, color: "var(--muted)" },
+  select: { background: "var(--bg-raise)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", fontSize: 13.5, minHeight: 44 },
+  saveBar: { display: "flex", alignItems: "center", gap: 12, padding: 14 },
+  modalTitle: { fontSize: 15, fontWeight: 700, marginBottom: 10 },
 };
 
 const layoutCSS = `
-  /* Inline base is a single column; widen only where two columns fit. */
-  @media (min-width: 1024px) { .cfg-columns { grid-template-columns: 1fr 1fr !important; } }
-  @media (min-width: 560px) {
-    .cfg-fields { grid-template-columns: 1fr 1fr; }
-    .cfg-field-half { grid-column: span 1; }
-    .cfg-field-wide { grid-column: 1 / -1; }
-  }
-  @media (max-width: 559px) {
-    .cfg-fields { grid-template-columns: 1fr; }
-    .cfg-field-half, .cfg-field-wide { grid-column: 1 / -1; }
-  }
-  /* Keep the sticky save bar clear of the mobile bottom nav. */
-  @media (max-width: 820px) {
-    .cfg-savebar { bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom)) !important; }
-  }
+@media (max-width: 900px) { .cfg-columns { grid-template-columns: 1fr !important; } }
 `;
-

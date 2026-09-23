@@ -222,6 +222,20 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     }
   }
 
+  async function copyEmailLink(email) {
+    try {
+      const d = await api.get(`/api/accounts/email-link?email=${encodeURIComponent(email)}`)
+      await navigator.clipboard.writeText(d.url)
+      notify('Inbox link copied')
+    } catch (e) { notify(e.message || 'No inbox link') }
+  }
+
+  function openEmailLink(email) {
+    api.get(`/api/accounts/email-link?email=${encodeURIComponent(email)}`)
+      .then((d) => window.open(d.url, '_blank', 'noopener'))
+      .catch((e) => notify(e.message || 'No inbox link'))
+  }
+
   function stopResendPoll() {
     if (resendTimer.current) {
       clearInterval(resendTimer.current)
@@ -229,11 +243,11 @@ export default function AccountsPanel({ group = '', onClearGroup, onGroupsChange
     }
   }
 
-  // Reorder the Litensi mailbox and poll until a code arrives or the server
+  // Re-poll the PakMail inbox and wait until a code arrives or the server
   // stops at its own 2-minute ceiling.
   async function startResend(email) {
     stopResendPoll()
-    setResend({ email, status: 'running', message: 'Reordering mailbox', code: '', expired_at: '' })
+    setResend({ email, status: 'running', message: 'Re-polling inbox', code: '', expired_at: '' })
     try {
       await api.post('/api/accounts/resend', { email })
     } catch (e) {
@@ -991,6 +1005,12 @@ aria-controls="row-action-menu"
             onClick={() => { closeMenu(); startResend(menuRow.email) }}
           >
             Resend mailbox code
+          </MenuItem>
+          <MenuItem icon={Copy} onClick={() => { closeMenu(); copyEmailLink(menuRow.email) }}>
+            Copy inbox link
+          </MenuItem>
+          <MenuItem icon={Play} onClick={() => { closeMenu(); openEmailLink(menuRow.email) }}>
+            Open inbox in browser
           </MenuItem>
           {!group && (
             <MenuItem

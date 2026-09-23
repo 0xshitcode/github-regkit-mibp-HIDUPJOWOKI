@@ -1,9 +1,10 @@
 # GitHub Register
 
-A GitHub account registration toolkit that uses Camoufox for browser automation
-and mail.cx (free, default) or [Litensi](https://litensi.id) (paid) for
-verification mailboxes. It can be run from the CLI, through a local web
-console, or as a Docker service behind an nginx reverse proxy.
+A GitHub account registration toolkit that uses Camoufox for browser automation,
+[PakMail](https://pakmail.vercel.app/docs) (free) for verification mailboxes and
+[NextProxy](https://console.nextproxy.site) (live pool) for proxies. It can be run
+from the CLI, through a local web console, or as a Docker service behind an nginx
+reverse proxy.
 
 > Use this only for accounts and workflows you are authorized to manage.
 > Automated account registration may violate GitHub's Terms of Service and can
@@ -23,8 +24,9 @@ console, or as a Docker service behind an nginx reverse proxy.
   and a drawer on phones.
 - Organizes accounts into groups, merges account files into one, and exports
   accounts as TXT, CSV, or JSON.
-- Reorders a Litensi mailbox from the console to fetch a fresh code, capped at
-  two minutes with a manual stop.
+- Re-polls a PakMail inbox from the console to fetch a fresh code, capped at
+  two minutes with a manual stop. Each account's inbox access link is saved
+  (`accounts/email_links.json`) and can be copied/opened from Accounts.
 - Protects the console with username + password auth (rate-limited,
   server-side sessions) for self-hosting.
 
@@ -34,8 +36,8 @@ console, or as a Docker service behind an nginx reverse proxy.
 
 - Python 3.11 or newer.
 - Node.js 18 or newer, only to rebuild the frontend.
-- A mailbox provider: mail.cx works out of the box (free, default). For the
-  Litensi provider, a Litensi account with API credentials and a balance.
+- A NextProxy API key (free starter: 1000 credits) for the live proxy pool.
+  PakMail needs no key — each mailbox carries its own access token.
 - Internet access. A residential proxy may be needed depending on your network.
 
 ## Installation
@@ -90,12 +92,15 @@ Set your local values in `config.json`. This file must never be committed.
 
 ```json
 {
-  "mail_provider": "mailcx",
-  "mailcx_domain": "",
-  "litensi_api_id": "1234",
-  "litensi_api_key": "your-api-key",
-  "litensi_site": "github.com",
-  "litensi_zone": "",
+  "pakmail_service": "server-1",
+  "pakmail_domain": "",
+  "pakmail_domain_whitelist": "",
+  "pakmail_domain_blacklist": "",
+  "nextproxy_api_key": "nex_live_...",
+  "nextproxy_type": "socks5",
+  "nextproxy_country": "",
+  "nextproxy_limit": 20,
+  "nextproxy_max_latency": 0,
   "register_count": 1,
   "proxy": "",
   "proxy_file": "",

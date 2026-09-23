@@ -1,24 +1,27 @@
-"""Configuration loading for the GitHub register toolkit."""
+"""Configuration loading for the GitHub register toolkit (PakMail + NextProxy only)."""
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 from pathlib import Path
 
+PAKMAIL_SERVICES = ("server-1", "server-2", "server-3", "gmail")
+
+
 @dataclass
 class Config:
-    # Mail provider: "mailcx" (free, default) or "litensi" (paid, reliable)
-    mail_provider: str = "mailcx"  # "mailcx" | "litensi"
-    # Mail.cx temp email settings
-    mailcx_domain: str = ""  # empty = auto-pick from uqu.me, ddker.com, 9k3r.com
-    # Litensi Mail settings
-    litensi_api_id: str = ""
-    litensi_api_key: str = ""
-    litensi_site: str = ""   # e.g. "github.com"
-    litensi_zone: str = ""   # blank = auto-pick cheapest in-stock zone
+    # PakMail temp email (https://pakmail.vercel.app/docs)
+    pakmail_service: str = "server-1"  # server-1 | server-2 | server-3 | gmail
+    pakmail_domain: str = ""  # empty = auto-pick (server-1/2 only)
+    pakmail_domain_whitelist: str = ""  # csv, e.g. "ozsaip.com,yzcalo.com"
+    pakmail_domain_blacklist: str = ""  # csv, excluded even if service lists them
+    # NextProxy live proxy source (https://console.nextproxy.site)
+    nextproxy_api_key: str = ""
+    nextproxy_type: str = "socks5"  # all | https | socks4 | socks5
+    nextproxy_country: str = ""  # e.g. "US","DE","SG" (empty = any)
+    nextproxy_limit: int = 20
+    nextproxy_max_latency: int = 0  # ms, 0 = off
     register_count: int = 1
-    proxy: str = ""
-    proxy_file: str = ""     # proxy pool file in project root (one URL per line); overrides proxy
     headless: bool = False
     delay_sec: float = 5.0
     max_username_tries: int = 6
@@ -44,7 +47,14 @@ class Config:
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
         known = set(cls.__dataclass_fields__)
-        mapped = {k: v for k, v in data.items() if k in known}
+        # tolerate legacy keys from pre-refactor configs (litensi/mailcx/file proxy)
+        legacy = {"mail_provider", "mailcx_domain", "litensi_api_id", "litensi_api_key",
+                  "litensi_site", "litensi_zone", "proxy", "proxy_file", "proxy_source"}
+        mapped = {k: v for k, v in data.items() if k in known and k not in legacy}
+        # legacy pakmail_service values pass through; validate lightly
+        if isinstance(mapped.get("pakmail_service"), str):
+            svc = mapped["pakmail_service"].strip().lower()
+            mapped["pakmail_service"] = svc if svc in PAKMAIL_SERVICES else "server-1"
         return cls(**mapped)
 
 
