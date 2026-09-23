@@ -505,7 +505,42 @@ async def api_nextproxy_pool(
         raise HTTPException(status_code=502, detail=f"Unable to contact NextProxy: {exc}")
     preview = [{"ip": n.get("ip"), "port": n.get("port"), "protocol": n.get("protocol"),
                 "country": n.get("country"), "latency": n.get("latency")} for n in nodes[:20]]
-    return {"ok": True, "count": len(nodes),
+    # The API-reported latency is measured by NextProxy, not from this host —
+    # a node can list as 100ms yet refuse our traffic (407 auth, 403, timeout).
+    # Probe each listed node the same way pick_fast does so the UI shows the
+    # truth instead of a green list that e2e then rejects.
+    import concurrent.futures as _fut
+
+    urls = [client.to_url(n) for n in nodes[:20]]
+
+    def _probe_one(url: str) -> dict:
+        tcp = client.probe(url, timeout=5.0)
+        if tcp < 0:
+            return {"ok": False, "detail": "TCP connect failed"}
+        import requests as _requests
+
+        try:
+            resp = _requests.get("https://api.ipify.org",
+                                 proxies={"http": url, "https": url}, timeout=10)
+            if resp.ok and resp.text and resp.text.strip()[0].isdigit():
+                return {"ok": True, "detail": f"exit {resp.text.strip()}"}
+        except Exception as exc:
+            msg = str(exc)
+            if "407" in msg:
+                return {"ok": False, "detail": "407 proxy auth required"}
+            if "403" in msg:
+                return {"ok": False, "detail": "403 forbidden"}
+            if "timeout" in msg.lower():
+                return {"ok": False, "detail": "traffic timeout"}
+            return {"ok": False, "detail": type(exc).__name__}
+        return {"ok": False, "detail": f"HTTP {resp.status_code if resp else '?'}"}
+
+    with _fut.ThreadPoolExecutor(max_workers=min(len(urls), 20) or 1) as ex:
+        checks = list(ex.map(_probe_one, urls)) if urls else []
+    for entry, check in zip(preview, checks):
+        entry.update(check)
+    usable = sum(1 for c in checks if c["ok"])
+    return {"ok": True, "count": len(nodes), "usable": usable,
             "proxies": preview, "credits_remaining": client.credits_remaining}
 
 

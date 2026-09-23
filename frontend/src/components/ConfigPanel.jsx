@@ -252,18 +252,22 @@ function PoolModal({ loading, error, data, onClose, onRefresh }) {
     <div className="ui-dialog-backdrop" onMouseDown={onClose}>
       <div className="ui-dialog" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
         <div style={styles.modalTitle}>NextProxy Live Pool</div>
-        {loading && (<div className="panel-state"><Spinner /> <span>Fetching...</span></div>)}
+        {loading && (<div className="panel-state"><Spinner /> <span>Fetching + probing from this host (up to ~15s)...</span></div>)}
         {error && <div style={{ color: "var(--danger)", fontSize: 13 }}>{error}</div>}
         {data && (
           <>
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>
-              {data.count} usable proxies
+              {data.usable ?? data.count} of {data.count} reach from this host
               {data.credits_remaining ? ` · credits: ${data.credits_remaining}` : ""}
             </div>
             <div style={{ maxHeight: 320, overflow: "auto", fontSize: 12.5, fontFamily: "monospace" }}>
               {(data.proxies || []).map((p, i) => (
                 <div key={i} style={{ padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
+                  <span style={{ color: p.ok ? "var(--success)" : "var(--danger)" }}>
+                    {p.ok ? "●" : "○"}
+                  </span>{" "}
                   {p.ip}:{p.port} · {p.protocol} · {p.country} · {p.latency}ms
+                  {p.detail ? ` · ${p.detail}` : ""}
                 </div>
               ))}
             </div>
