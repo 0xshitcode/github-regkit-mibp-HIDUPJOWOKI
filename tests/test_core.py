@@ -416,3 +416,24 @@ def test_reauth_stage_failed_relogin_raises(monkeypatch):
         assert "2FA" in str(exc) and "re-login failed" in str(exc)
     else:
         raise AssertionError("expected SignupError")
+
+
+def test_reauth_stage_suspended_fails_fast(monkeypatch):
+    """Suspended bounce -> immediate SignupError, no 30s re-login burn."""
+    from github_register import runner
+
+    page = _StagePage("https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsuspended")
+    calls = {"login": 0}
+    monkeypatch.setattr(runner, "_try_login",
+                        lambda *a, **k: (calls.__setitem__("login", 1), True)[1])
+    try:
+        runner._with_reauth_stage(
+            page, object(), _stage_cfg(), "a@b.com", "Pw12345678!",
+            None, "oid", set(), lambda m: None, lambda: False,
+            "create repo", lambda: (_ for _ in ()).throw(runner.SignupError("bounced")),
+        )
+    except runner.SignupError as exc:
+        assert "suspended" in str(exc).lower()
+    else:
+        raise AssertionError("expected SignupError")
+    assert calls["login"] == 0, "suspended accounts must not attempt re-login"

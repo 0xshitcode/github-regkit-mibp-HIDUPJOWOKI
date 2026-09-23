@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import urlsplit
+from urllib import parse as _urlparse
 
 from camoufox.sync_api import Camoufox
 import requests
@@ -900,6 +901,19 @@ def _browser_ctx_options(cfg: Config, log=None) -> dict:
                     log(f"[!] socks exit-IP lookup failed ({exc}); geoip disabled — "
                         f"timezone/locale may mismatch the proxy country. "
                         f"Trust cookie will NOT be restored (IP unknown).")
+    else:
+        # Direct connection: still learn the exit IP (bare lookup, no proxy)
+        # so DataDome trust cookies can be bound and restored across runs.
+        try:
+            import requests as _requests
+
+            _last_exit_ip = (
+                _requests.get("https://api.ipify.org", timeout=8).text.strip() or None
+            )
+            if log and _last_exit_ip:
+                log(f"[*] direct exit IP: {_last_exit_ip} (trust-cookie binding)")
+        except Exception:
+            _last_exit_ip = None
     if getattr(cfg, "fresh_profile", False):
         # fresh browser per account — no user_data_dir at all
         if log:
@@ -1731,6 +1745,18 @@ def _with_reauth_stage(page, context, cfg, email, password, mail, order_id,
     except Exception as exc:
         if not _session_bounced(page):
             raise
+        bounced_url = page.url or ""
+        # NOTE: return_to is URL-encoded (%2Fsuspended), so match the decoded
+        # path as well as the raw token.
+        if "suspended" in _urlparse.unquote(bounced_url).lower():
+            # The account itself is flagged — GitHub will never issue a
+            # session no matter how often we re-login. Fail fast (instead of
+            # burning 30s per stage) so the verified credentials are saved
+            # with an accurate reason.
+            raise SignupError(
+                f"{label}: account flagged/suspended by GitHub "
+                f"(bounce={bounced_url}); stages need a clean account"
+            )
         log(f"[*] {label}: session bounced to login — re-authenticating and retrying once")
         ok = _try_login(
             page, email, password, context, log, mail=mail,
