@@ -265,3 +265,67 @@ if __name__ == "__main__":
         fn()
         print(f"[OK] {name}")
     print("[*] all tests passed")
+
+
+class _FakeLocator:
+    def __init__(self, visible):
+        self._visible = visible() if callable(visible) else visible
+
+    @property
+    def first(self):
+        return self
+
+    def is_visible(self):
+        v = self._visible() if callable(self._visible) else self._visible
+        return v
+
+    def count(self):
+        return 1
+
+
+class _FakePage:
+    def __init__(self, url, visible=True):
+        self.url = url
+        self._visible = visible
+        self.ready_polls = 0
+
+    def locator(self, sel):
+        self.ready_polls += 1
+        return _FakeLocator(self._visible)
+
+
+def test_form_ready_rejects_homepage_hero():
+    """github.com homepage hero email field must not count as the signup form."""
+    from github_register import runner
+
+    home = _FakePage("https://github.com/", visible=True)
+    assert runner._form_ready(home) is False
+    signup = _FakePage("https://github.com/signup", visible=True)
+    assert runner._form_ready(signup) is True
+    hidden = _FakePage("https://github.com/signup", visible=False)
+    assert runner._form_ready(hidden) is False
+
+
+def test_vanished_form_error_is_ip_related():
+    """The exact fill-time failure must route to IP rotation, not instant FAIL."""
+    from github_register import runner
+
+    msg = ("no visible element matching ['#email', \"input[name='email']\", "
+           "\"input[type='email']\"]")
+    assert runner._looks_ip_related(runner.SignupError(msg)) is True
+
+
+def test_fill_signup_form_rewaits_stale_form(monkeypatch):
+    """Form vanishing between ready-check and fill is re-waited, not fatal."""
+    from github_register import runner
+    from github_register.config import Config
+
+    states = [False, False, True]  # page settles on the 3rd poll
+    page = _FakePage("https://github.com/signup", visible=lambda: states.pop(0) if states else True)
+    monkeypatch.setattr(runner, "_sleep_with_cancel", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "_human_fill", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "_fill_and_create_account",
+                        lambda page, base, tries, log, stop=None: "someuser")
+    got = runner._fill_signup_form(page, Config(), "a@b.com", "Pw12345678!", lambda m: None, lambda: False)
+    assert got == "someuser"
+    assert page.ready_polls >= 3

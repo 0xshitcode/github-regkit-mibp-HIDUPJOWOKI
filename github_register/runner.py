@@ -295,7 +295,8 @@ def _rotate_sticky_proxy() -> None:
 
 _IP_FAILURE_MARKERS = (
     "timeout", "timed out", "blocked", "datadome", "403", "forbidden",
-    "captcha-delivery", "form not ready", "email form did not appear",
+    "captcha-delivery", "form not ready", "no visible element",
+    "email form did not appear",
     "no challenge marker", "proxy", "connection", "network", "unreachable",
     "reset by peer", "socks", "exit-ip", "risk check",
 )
@@ -492,8 +493,13 @@ def _try_click_datadome(page, log) -> None:
 
 
 def _form_ready(page) -> bool:
-    sel = ", ".join(_EMAIL_INPUTS)
     try:
+        # The github.com homepage hero also has a visible email field matching
+        # _EMAIL_INPUTS — gate on the URL so a mid-navigation observation on
+        # the homepage is never mistaken for the real signup form.
+        if "signup" not in (page.url or ""):
+            return False
+        sel = ", ".join(_EMAIL_INPUTS)
         return page.locator(sel).first.is_visible()
     except Exception:
         return False
@@ -1662,6 +1668,25 @@ def _fill_signup_form(page, cfg, email, password, log, stop) -> str:
     Returns the accepted username. Raises SignupError with a clear reason when
     the form cannot be completed (validation error, overlay, rate limit).
     """
+    # The mailbox order (a PakMail API call) burns seconds between the
+    # ready-check in _open_signup and this fill — the page can re-render or
+    # drop into a DataDome challenge in that gap. Re-wait for the real form
+    # instead of failing on a stale observation. The message deliberately
+    # contains 'form not ready' so both the Tier-1/2 reload logic and the
+    # IP-rotation retry in register_one engage.
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        _raise_if_cancelled(stop)
+        _raise_if_rate_limited(page)
+        if _form_ready(page):
+            break
+        _sleep_with_cancel(1, stop)
+    else:
+        raise SignupError(
+            f"signup form not ready at fill time (url={page.url}, "
+            f"{_challenge_hint(page) or 'no challenge marker'}); "
+            f"page changed after the ready check — retry the run or change IP"
+        )
     # Fill in the same order as a person: email -> wait -> password ->
     # wait -> username. Each blur gives GitHub's async form validators and
     # Octocaptcha time to settle before Create account is considered.
@@ -1885,6 +1910,7 @@ def _run_signup(
                         or "click" in msg.lower()
                         or "overlay" in msg.lower()
                         or "form" in msg.lower()
+                        or "no visible element" in msg.lower()
                     )
                     if reloadable and page_attempt < page_reloads:
                         page_last_exc = exc
@@ -1904,6 +1930,7 @@ def _run_signup(
                     or "click" in msg.lower()
                     or "overlay" in msg.lower()
                     or "form" in msg.lower()
+                    or "no visible element" in msg.lower()
                 )
                 if reloadable and session_attempt <= session_reloads:
                     last_exc = exc
