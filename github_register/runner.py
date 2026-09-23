@@ -505,11 +505,12 @@ def _stop_proxy_bridge() -> None:
 
 
 def _rotate_sticky_proxy() -> None:
-    """Discard a blocked DataImpulse sticky port and allocate a new one."""
+    """Discard the current proxy and force a fresh pick on next use."""
     global _sticky_suffix, _last_exit_ip
     _stop_proxy_bridge()
     _sticky_suffix = None
     _last_exit_ip = None
+    _NEXTPROXY_CACHE.update({"at": 0.0, "urls": []})
 
 
 def _disable_blocked_proxy(log) -> None:
