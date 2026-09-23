@@ -21,6 +21,9 @@ class Config:
     # pool; blacklist (host:port) is skipped without probing. CSV.
     nextproxy_whitelist: str = ""  # e.g. "http://1.2.3.4:8888,http://5.6.7.8:10111"
     nextproxy_blacklist: str = ""  # e.g. "2.59.132.39:3128,207.154.201.220:3128"
+    # Max TCP-handshake ping (ms) a candidate must pass; slower nodes are
+    # rejected before any traffic check. 0 = off.
+    nextproxy_max_ping_ms: int = 128
     # Direct connections are FORBIDDEN: without a working pool node the run
     # fails instead of leaking the real exit IP (which gets flagged + burned).
     proxy_required: bool = True

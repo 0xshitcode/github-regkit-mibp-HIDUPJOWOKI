@@ -190,7 +190,7 @@ class NextProxyClient:
 
     def pick_fast(self, limit: int = 20, proxy_type: str = "socks5",
                   max_probes: int = 5, timeout: float = 5.0,
-                  whitelist: str = "", **kw) -> str:
+                  whitelist: str = "", max_ping_ms: float = 0, **kw) -> str:
         """First genuinely-working URL from the pool (already latency-sorted).
 
         TCP connect alone is not enough — transparent/filtering proxies accept
@@ -213,9 +213,13 @@ class NextProxyClient:
             if url.startswith("https://"):
                 cands.insert(0, "http://" + url[len("https://"):])
             mine = direct_exit_ip()
+            ping_cap = (max_ping_ms or 0) / 1000.0
             for cand in cands:
-                if self.probe(cand, timeout=timeout) < 0:
+                tcp_s = self.probe(cand, timeout=timeout)
+                if tcp_s < 0:
                     continue
+                if ping_cap and tcp_s > ping_cap:
+                    continue  # too slow — reject before the traffic check
                 try:
                     resp = _requests.get("https://api.ipify.org", proxies={"http": cand, "https": cand},
                                          timeout=10)

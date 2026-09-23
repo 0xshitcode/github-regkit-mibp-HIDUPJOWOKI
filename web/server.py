@@ -322,6 +322,7 @@ class ConfigBody(BaseModel):
     proxy_required: Optional[bool] = None
     nextproxy_whitelist: Optional[str] = None
     nextproxy_blacklist: Optional[str] = None
+    nextproxy_max_ping_ms: Optional[int] = None
     create_repo: Optional[bool] = None
     repo_name: Optional[str] = None
     enable_2fa: Optional[bool] = None

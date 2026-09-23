@@ -19,6 +19,7 @@ const NEXTPROXY_FIELDS = [
   { key: "proxy_required", label: "Proxy required — fail instead of direct (never leak real IP)", type: "checkbox", group: "Proxy", wide: true },
   { key: "nextproxy_whitelist", label: "Whitelist (csv URLs, tried first — e.g. http://1.2.3.4:8888)", group: "Proxy", wide: true },
   { key: "nextproxy_blacklist", label: "Blacklist (csv ip:port, skipped — e.g. 2.59.132.39:3128)", group: "Proxy", wide: true },
+  { key: "nextproxy_max_ping_ms", label: "Max ping ms per candidate (0 = off)", type: "number", group: "Proxy" },
 ];
 
 const REG_FIELDS = [

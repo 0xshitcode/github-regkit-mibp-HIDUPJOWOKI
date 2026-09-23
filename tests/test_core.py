@@ -497,3 +497,25 @@ def test_fetch_excludes_blacklist(monkeypatch):
     assert [n["ip"] for n in got] == ["1.1.1.1"]
     got2 = c.fetch(limit=10, proxy_type="https")
     assert len(got2) == 2
+
+
+def test_pick_fast_rejects_slow_ping(monkeypatch):
+    """Candidates slower than max_ping_ms are rejected without traffic check."""
+    from github_register import nextproxy as nx
+
+    c = nx.NextProxyClient()
+    monkeypatch.setattr(nx.NextProxyClient, "probe", lambda self, url, timeout=5.0: 0.250)
+    monkeypatch.setattr(nx, "direct_exit_ip", lambda timeout=8.0: "9.9.9.9")
+    traffic = {"n": 0}
+
+    class _Resp:
+        ok = True
+        text = "1.2.3.4"
+        status_code = 200
+
+    import requests as _rq
+    monkeypatch.setattr(_rq, "get", lambda *a, **k: (traffic.__setitem__("n", 1), _Resp())[1])
+    monkeypatch.setattr(nx.NextProxyClient, "fetch_urls", lambda self, **k: ["http://1.2.3.4:8888"])
+    assert c.pick_fast(limit=5, max_probes=5, max_ping_ms=128) == ""
+    assert traffic["n"] == 0, "slow node must not reach the traffic check"
+    assert c.pick_fast(limit=5, max_probes=5, max_ping_ms=0) == "http://1.2.3.4:8888"
