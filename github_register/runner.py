@@ -229,20 +229,28 @@ def _proxy_exit_ip(url: str, timeout: int = 8) -> str:
     import requests as _requests
 
     p = urlsplit(url.strip())
-    scheme = "socks5h" if (p.scheme or "socks").lower().startswith("socks") else (p.scheme or "http")
+    base_scheme = (p.scheme or "http").lower()
+    if base_scheme in ("socks", "socks5"):
+        base_scheme = "socks5h"
+    # Plain-HTTP forward proxies dominate the pool: for https-labeled nodes
+    # try the http scheme first (https-scheme TLS flaps on these relays).
+    schemes = [base_scheme]
+    if base_scheme == "https":
+        schemes.insert(0, "http")
     auth = f"{p.username}:{p.password}@" if p.username else ""
     port = p.port or 1080
-    proxies = {"http": f"{scheme}://{auth}{p.hostname}:{port}",
-               "https": f"{scheme}://{auth}{p.hostname}:{port}"}
     last_exc: Exception | None = None
-    for check_url in ("https://api.ipify.org", "https://icanhazip.com"):
-        try:
-            resp = _requests.get(check_url, proxies=proxies, timeout=timeout)
-            ip = (resp.text or "").strip()
-            if resp.ok and ip:
-                return ip
-        except Exception as exc:
-            last_exc = exc
+    for scheme in schemes:
+        proxies = {"http": f"{scheme}://{auth}{p.hostname}:{port}",
+                   "https": f"{scheme}://{auth}{p.hostname}:{port}"}
+        for check_url in ("https://api.ipify.org", "https://icanhazip.com"):
+            try:
+                resp = _requests.get(check_url, proxies=proxies, timeout=timeout)
+                ip = (resp.text or "").strip()
+                if resp.ok and ip:
+                    return ip
+            except Exception as exc:
+                last_exc = exc
     raise SignupError(f"proxy exit-IP lookup failed: {last_exc} "
                       f"('405/407' = proxy refuses CONNECT/auth)")
 

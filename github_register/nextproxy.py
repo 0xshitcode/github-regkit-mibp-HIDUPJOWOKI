@@ -83,7 +83,9 @@ class NextProxyClient:
             try:
                 data = resp.json()
             except ValueError:
-                raise NextProxyError(f"nextproxy bad json (HTTP {resp.status_code})")
+                # e.g. HTTP 504 HTML from one host — try the next base
+                last_exc = NextProxyError(f"nextproxy bad json (HTTP {resp.status_code})")
+                continue
             if isinstance(data, dict) and data.get("status") == "error":
                 msg = f"{data.get('code')}: {data.get('message')}"
                 # 401 with a key = bad/revoked key; drop the key and retry as
@@ -179,11 +181,12 @@ class NextProxyClient:
 
         def _check(url: str) -> str:
             # Pool "https" means "relays HTTPS targets", not "speaks TLS":
-            # live nodes are usually plain-HTTP forward proxies (CONNECT for
-            # HTTPS targets), so try the http scheme when https fails.
+            # live nodes are plain-HTTP forward proxies (CONNECT for HTTPS
+            # targets). Try http FIRST — https-scheme checks produce false
+            # positives on flapping nodes (TLS passes once, dies at launch).
             cands = [url]
             if url.startswith("https://"):
-                cands.append("http://" + url[len("https://"):])
+                cands.insert(0, "http://" + url[len("https://"):])
             mine = direct_exit_ip()
             for cand in cands:
                 if self.probe(cand, timeout=timeout) < 0:
