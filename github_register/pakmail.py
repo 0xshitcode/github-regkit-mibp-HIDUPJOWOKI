@@ -213,6 +213,7 @@ class PakMailClient:
         skip = {str(c).strip() for c in (exclude_codes or ()) if str(c).strip()}
         started = time.time()
         attempts = 0
+        seen_detail: set = set()  # message ids whose detail was already fetched
         while time.time() - started < timeout:
             if cancel_cb and cancel_cb():
                 raise MailboxCancelled("cancelled while waiting for mail")
@@ -231,6 +232,9 @@ class PakMailClient:
                     # when the message looks GitHub-relevant.
                     head = f"{msg.get('subject', '')} {msg.get('from', '')} {msg.get('fromEmail', '')}".lower()
                     if "github" in head or "launch" in head or "verif" in head or "code" in head:
+                        if str(msg["id"]) in seen_detail:
+                            continue
+                        seen_detail.add(str(msg["id"]))
                         try:
                             detail = self.get_message_detail(order_id, str(msg["id"]))
                         except PakMailError as exc:

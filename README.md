@@ -1,399 +1,180 @@
 # GitHub Register
 
-A GitHub account registration toolkit that uses Camoufox for browser automation,
-[PakMail](https://pakmail.vercel.app/docs) (free) for verification mailboxes and
-[NextProxy](https://console.nextproxy.site) (live pool) for proxies. It can be run
-from the CLI, through a local web console, or as a Docker service behind an nginx
-reverse proxy.
+Register GitHub accounts automatically with a stealth browser, free temp mail, and a live proxy pool. You get a web console for jobs, logs, and accounts, or a CLI for single runs.
 
-> Use this only for accounts and workflows you are authorized to manage.
-> Automated account registration may violate GitHub's Terms of Service and can
-> result in account or IP restrictions.
+> Use this only for accounts and workflows you are authorized to manage. Automated registration may violate GitHub Terms of Service and can trigger account or IP restrictions.
 
-## Features
-
-- Creates a mailbox, password, and username for GitHub signup.
-- Verifies the eight-digit GitHub launch code from the mailbox.
-- Logs in again when a newly verified account is redirected to `/login`.
-- Optionally creates a first repository, enables TOTP 2FA, and stores recovery
-  codes per account.
-- Optionally sets a profile status and completes profile fields after 2FA.
-- Provides a web console for configuration, job control, live logs, account
-  export, TOTP generation, and recovery-code viewing.
-- Works on desktop and mobile: the console reflows to a bottom navigation bar
-  and a drawer on phones.
-- Organizes accounts into groups, merges account files into one, and exports
-  accounts as TXT, CSV, or JSON.
-- Re-polls a PakMail inbox from the console to fetch a fresh code, capped at
-  two minutes with a manual stop. Each account's inbox access link is saved
-  (`accounts/email_links.json`) and can be copied/opened from Accounts.
-- Protects the console with username + password auth (rate-limited,
-  server-side sessions) for self-hosting.
-
-<img src="result.webp" alt="GitHub Register web console" width="880">
-
-## Requirements
-
-- Python 3.11 or newer.
-- Node.js 18 or newer, only to rebuild the frontend.
-- A NextProxy API key (free starter: 1000 credits) for the live proxy pool.
-  PakMail needs no key — each mailbox carries its own access token.
-- Internet access. A residential proxy may be needed depending on your network.
-
-## Installation
+## Run it
 
 ```bash
 git clone <repository-url> github-regkit
 cd github-regkit
-
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-
-# Download Camoufox once.
-python -m camoufox fetch
-
-# Create local configuration.
-cp config.example.json config.json
+./run.sh
 ```
 
-On Windows PowerShell:
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-### Linux (Ubuntu/Debian)
-
-Headful mode (`headless: false`) needs a display plus the Firefox system
-libraries. On a desktop these are usually already installed; on a minimal
-server install them and run inside a virtual display:
+`run.sh` checks every dependency and skips what exists: system libraries, `.venv`, Python packages, the Camoufox browser (1.3 GB, once), the frontend build, `config.json`, and `.env`. Then it starts the console at `http://127.0.0.1:8093`.
 
 ```bash
-# Ubuntu 22.04
-sudo apt update
-sudo apt install -y libgtk-3-0 libdbus-glib-1-2 libxt6 libasound2 xvfb
-
-# Ubuntu 24.04 uses libasound2t64 instead of libasound2
-sudo apt install -y libgtk-3-0 libdbus-glib-1-2 libxt6 libasound2t64 xvfb
-
-# headless VPS — wrap headful runs with a virtual display
-xvfb-run -a python main.py --count 1
+./run.sh --cli --count 3   # register from the terminal instead
+./run.sh --rebuild         # rebuild the frontend, then start the console
 ```
 
-For unattended servers, `headless: true` (or `python main.py --headless`)
-works without a display, though it is slightly more likely to be flagged by
-DataDome.
+## How it works
+
+1. The runner picks a healthy proxy from the NextProxy live pool (TCP plus HTTPS checked, fastest first) or goes direct when the pool is unusable
+2. Camoufox (anti-detect Firefox) opens the signup page and waits out DataDome
+3. Only then it creates a PakMail inbox on server-2, so no mailbox time burns during bot checks
+4. It fills email, password, and username, submits, and reads the 8-digit launch code from the inbox (list plus detail endpoint)
+5. It logs in again when GitHub redirects to `/login`
+6. It runs your post-signup stages: first repo, TOTP two-factor/authentication (2FA), profile status, and profile fields
+
+Post-signup failures never discard a verified account. The reason lands in the live log.
+
+## Features
+
+- **Automatic IP rotation**: DataDome blocks, rate limits, and proxy failures trigger a fresh IP plus a retry of the same account (`proxy_retry_attempts`, default 2)
+- **Health-gated proxy pool**: dead or filtering proxies are skipped before the browser starts; direct mode is the fallback, not a failure
+- **Inbox access links**: every account saves a shareable PakMail link in `accounts/email_links.json`; copy or open it from **Accounts**
+- **Re-poll inbox code**: re-read the same inbox for a new code (2 minute cap, manual stop), no reorder bookkeeping
+- **Account management**: groups, merge files, export TXT/CSV/JSON, TOTP codes, recovery codes
+- **Auth**: username plus password sessions, 10 failed logins per 60s per IP returns HTTP 429
+- **Mobile layout**: bottom navigation plus drawer under 820 px width
+
+## Requirements
+
+- Linux (tested on Debian 13/WSL), macOS, or Windows with WSL
+- Internet access
+- A NextProxy API key (optional; the guest pool works without one and the client falls back to it when a key returns 401)
+- Node.js 18 or newer (only to build the frontend; `run.sh` installs it when missing)
 
 ## Configuration
 
-Set your local values in `config.json`. This file must never be committed.
+Edit `config.json` (never commit this file):
 
 ```json
 {
-  "pakmail_service": "server-1",
   "pakmail_domain": "",
   "pakmail_domain_whitelist": "",
   "pakmail_domain_blacklist": "",
-  "nextproxy_api_key": "nex_live_...",
-  "nextproxy_type": "socks5",
+  "nextproxy_api_key": "",
+  "nextproxy_type": "https",
   "nextproxy_country": "",
   "nextproxy_limit": 20,
   "nextproxy_max_latency": 0,
   "register_count": 1,
-  "proxy": "",
-  "proxy_file": "",
   "headless": false,
-  "delay_sec": 5.0,
-  "max_username_tries": 6,
   "otp_timeout_sec": 240,
-  "browser_profile_dir": ".browser-profile",
-  "fresh_profile": true,
-  "proxy_hard_block_retries": 2,
-  "proxy_rate_limit_retries": 2,
-  "create_repo": true,
-  "repo_name": "hello",
-  "enable_2fa": true,
-  "set_profile_status": true,
-  "profile_status": "On vacation",
-  "complete_profile": true,
-  "profile_name": "",
-  "profile_bio": "",
-  "profile_location": ""
+  "proxy_retry_attempts": 2
 }
 ```
 
 | Field | Description |
 | --- | --- |
-| `mail_provider` | Mail backend: `mailcx` (free, default) or `litensi` (paid, more reliable). |
-| `mailcx_domain` | Mail.cx domain. Leave blank to auto-pick from available domains. |
-| `litensi_api_id` / `litensi_api_key` | Litensi API credentials (used when `mail_provider` is `litensi`). |
-| `litensi_site` | Sender domain in Litensi, for example `github.com`. |
-| `litensi_zone` | Mailbox zone. Leave blank to choose the cheapest in-stock zone. |
-| `register_count` | Accounts to process in one job. |
-| `proxy` | Optional single proxy in `http://user:pass@host:port` format. |
-| `proxy_file` | Optional proxy pool file in the project root (one `scheme://user:pass@host:port` per line). Each account picks a random proxy; also settable via the web console upload. Takes precedence over `proxy`. |
-| `headless` | Runs without a browser window. `false` is easier to observe and often more stable. |
-| `delay_sec` | Delay between accounts. |
-| `max_username_tries` | Username conflict retry limit. |
-| `otp_timeout_sec` | Maximum wait time for the verification email. |
-| `browser_profile_dir` | Persistent browser profile directory (trust cookies are carried separately, so fresh profiles still pass DataDome). |
-| `fresh_profile` | Uses a fresh browser profile for each account while carrying trusted cookies separately. |
-| `create_repo` / `repo_name` | Enables and names the first repository. |
-| `enable_2fa` | Enables TOTP 2FA and captures recovery codes. |
-| `set_profile_status` / `profile_status` | Enables and sets a post-2FA profile status. |
-| `complete_profile` | Enables post-2FA profile completion. |
-| `profile_name`, `profile_bio`, `profile_location` | Custom profile values. Blank fields use Random User or ZenQuotes data. |
+| `pakmail_domain` | Fixed inbox domain; blank means auto-pick from server-2 |
+| `pakmail_domain_whitelist` | CSV of preferred domains, for example `catchmail.io,ozsaip.com` |
+| `pakmail_domain_blacklist` | CSV of excluded domains |
+| `nextproxy_api_key` | Console API key; blank means guest pool |
+| `nextproxy_type` | `https`, `socks5`, `socks4`, or `all` (`https` connects most reliably from filtered networks) |
+| `nextproxy_country` | Two-letter filter such as `DE`; blank means any country |
+| `nextproxy_limit` | Pool size per fetch (max 100 for guests) |
+| `nextproxy_max_latency` | Drop nodes slower than this in ms; `0` means no filter |
+| `register_count` | Accounts per job |
+| `headless` | Hide the browser window; visible mode passes bot checks more often |
+| `otp_timeout_sec` | Seconds to wait for the verification mail per account |
+| `proxy_retry_attempts` | Retries of the same account with a fresh IP after IP or proxy failures |
+| `proxy_hard_block_retries` | Retries after a DataDome hard block |
+| `proxy_rate_limit_retries` | Retries after a GitHub rate limit |
+| `delay_sec` | Pause between accounts |
+| `create_repo`, `repo_name` | First repository stage and name prefix |
+| `enable_2fa` | TOTP 2FA stage; the secret lands in the account line |
+| `complete_profile`, `profile_name`, `profile_bio`, `profile_location` | Profile stage; blanks pull Random User or ZenQuotes data |
 
-## Running
-
-### Web console
-
-Build the UI after frontend changes:
+## Web console
 
 ```bash
-cd frontend
-npm install
-npm run build
-cd ..
+./run.sh
 ```
 
-Start the local server:
+Open `http://127.0.0.1:8093`:
+
+- **Status**: start or stop jobs, watch progress
+- **Live Log**: stream runner events
+- **Config**: edit settings, test the live proxy pool, browse PakMail domains
+- **Accounts**: copy or export, TOTP codes, recovery codes, inbox links, resend code, groups, merge, delete
+
+Protect the console before exposing it. Copy `.env.example` to `.env` (done by `run.sh`) and set strong values:
 
 ```bash
-source .venv/bin/activate
-python -m web.server
-```
-
-Open <http://127.0.0.1:8093>.
-
-- **Status**: start or stop jobs and inspect progress.
-- **Live Log**: review events in real time.
-- **Config**: edit local settings, check Litensi zones (with a zone search),
-  and check mail.cx domains.
-- **Accounts**: copy or export accounts (TXT / CSV / JSON), generate TOTP
-  codes, view recovery codes, resend a Litensi mailbox code, merge one account
-  file into another, and organize accounts into groups. Each row has an actions
-  menu for group, copy, 2FA, recovery, resend, and delete.
-
-The console is responsive: the sidebar collapses to an icon rail on narrow
-laptops, and on phones it switches to a top bar, a bottom navigation bar, and a
-slide-in drawer, with account rows reflowed into cards.
-
-### Resend mailbox code
-
-**Accounts → row actions → Resend mailbox code** reorders the same Litensi
-mailbox and polls its status until a new GitHub code arrives or two minutes
-pass. It stops automatically at the cap, and the dialog has a Stop button for
-an early abort. Reorder needs only the API credentials from `config.json` and
-the email stored in the accounts file, so no extra metadata is kept. The
-provider validates ownership of the email, so an address that was not ordered
-on this Litensi account fails with `ACTIVATION DOES NOT EXIST`.
-
-Protect the web console with username + password (like n8n/WAHA) for
-self-hosting/production. Copy `.env.example` to `.env` and fill it in
-(`.env` is git-ignored; server auto-loads it, no extra dependency):
-
-```bash
-cp .env.example .env
-python -m web.server
-```
-
-```dotenv
 GITHUB_REGISTER_HOST=127.0.0.1
 GITHUB_REGISTER_PORT=8093
 GITHUB_REGISTER_USERNAME=admin
 GITHUB_REGISTER_PASSWORD=use-a-strong-password
 ```
 
-Legacy single-password mode still works (`GITHUB_REGISTER_ACCESS_PASSWORD`),
-but username+password is preferred. When auth is enabled, the API docs page
-is disabled and every API route requires login. Login attempts are rate-limited
-per IP (10 failures/60s → HTTP 429), oversized login bodies are rejected
-(413), credential comparison is timing-safe, security headers are set
-(`nosniff`, `DENY` framing, `no-referrer`, `no-store` on APIs),
-and Sign out invalidates the server-side session.
-The server binds to `127.0.0.1` by default — only bind `0.0.0.0` behind a trusted reverse proxy with HTTPS.
+The server binds `127.0.0.1` by default. Bind `0.0.0.0` only behind a trusted HTTPS reverse proxy, and only on a network you trust: `config.json` holds real credentials.
 
-To open the console from another device on the same network (phone, tablet),
-set `GITHUB_REGISTER_HOST=0.0.0.0` in `.env`, restart the server, then browse to
-`http://<your-lan-ip>:8093` from the other device. Always set a strong
-`GITHUB_REGISTER_USERNAME`/`GITHUB_REGISTER_PASSWORD` first: `config.json` holds
-real API keys and proxy credentials, so an unauthenticated `0.0.0.0` bind
-exposes them to everyone on that network. Use this only on a trusted private
-network, never on public Wi-Fi.
-
-### Docker
-
-Multi-stage image: `node:20-alpine` (frontend build) + `python:3.12-slim`
-(runtime, includes Camoufox Firefox + `xvfb` for headful mode):
+## CLI
 
 ```bash
-cp .env.example .env          # set a strong GITHUB_REGISTER_PASSWORD
-cp config.example.json config.json
-touch proxies.txt .datadome-trust.json github_recovery_codes.txt
-docker compose up -d --build
+./run.sh --cli --count 1
+.venv/bin/python main.py --count 3 --headless
 ```
 
-Open <http://localhost:8093> for a quick local check. (The compose file in
-this repo does not publish ports — production traffic goes through nginx,
-see below; add a `ports:` entry if you need direct local access.)
+Press `Ctrl+C` to stop. A `KeyboardInterrupt` traceback during shutdown is normal.
 
-Compose overrides `GITHUB_REGISTER_HOST=0.0.0.0` inside the container.
-All files below persist on the host via bind-mount
-(do not delete): `config.json`, `accounts/` (`github_accounts_*.txt`,
-`recovery/`, `groups.json`), `.browser-profile/`, `proxies.txt`,
-`.datadome-trust.json` (trust cookie — losing it means DataDome 403s from scratch),
-`github_recovery_codes.txt`. Not persistent, which is fine: web login sessions
-(in memory — log in again). For display-less VPS, set `"headless": true` in
-`config.json` (cheaper, slightly easier for DataDome to flag). A DataDome
-challenge cannot be solved without a visible window, so headless runs fail fast
-instead of waiting for a manual click; use a residential proxy for headless.
-
-### VPS + nginx reverse proxy (one docker network)
-
-Compose already joins the external `nginx-network` and does **not** publish
-ports — public access only via nginx. Make sure the network exists:
-
-```bash
-docker network ls | grep nginx-network || docker network create nginx-network
-docker compose up -d --build
-```
-
-Example server block in nginx (same network, TLS via certbot):
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name regkit.example.com;
-
-    location / {
-        proxy_pass http://app:8093;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        # SSE live-log: no buffering + no quick timeouts
-        proxy_buffering off;
-        proxy_read_timeout 86400s;
-    }
-}
-```
-
-`GITHUB_REGISTER_TRUST_PROXY=1` (already in compose) makes rate-limit read the
-real IP from `X-Forwarded-For`. Do not enable it when the container is exposed
-directly without a proxy.
-
-### CLI
-
-```bash
-source .venv/bin/activate
-python main.py
-python main.py --count 3
-python main.py --proxy http://user:pass@host:port
-python main.py --headless
-python main.py --config config.local.json --count 1
-```
-
-Press `Ctrl+C` to stop the CLI or server. A `KeyboardInterrupt` or
-`asyncio.CancelledError` during Uvicorn shutdown is expected after interruption.
-
-## Registration Flow
-
-1. Open the signup page and fight through DataDome until the form is ready.
-2. Only then order a mailbox with the configured provider (mail.cx is
-   implicit and free; Litensi orders a zone, auto-picking the cheapest
-   in-stock zone when `litensi_zone` is blank). Ordering late avoids burning
-   balance/expiry while DataDome eats time; a fatal provider failure (empty
-   balance, bad key, out of stock, IP not allowed) aborts the job immediately.
-   A single mailbox that never receives the GitHub code within
-   `otp_timeout_sec` is only a per-account failure — that account is counted
-   as FAIL and the batch continues with the next one.
-3. Open GitHub signup and fill email, password, and a username based on the
-   mailbox local part.
-4. Submit the form. If an overlay intercepts pointer clicks, the runner falls
-   back to a DOM click. A disabled form is refreshed and filled with the same
-   data before switching browser sessions.
-5. Poll the mailbox and enter the GitHub launch code.
-6. Sign in again if GitHub redirects the new account to login.
-7. Create the first repository when enabled.
-8. Enable TOTP 2FA, capture recovery codes, and persist them per account.
-9. Optionally set profile status, then complete profile name, bio, and location.
-
-Post-signup stage failures do not discard an account that was already verified.
-The reason is written to Live Log.
-
-## Account Output
+## Account output
 
 ```text
 accounts/
   github_accounts_<timestamp>.txt
+  email_links.json
   recovery/
     <email-hash>.txt
 ```
 
-Each account file contains one line per account:
+Each account line uses this shape:
 
 ```text
 email----password----username----totp_secret----has_recovery
 ```
 
-Recovery codes are stored separately under `accounts/recovery/`. The Accounts
-page can reveal and copy them with the **Recovery** action.
-
-Example account output:
-
-```text
-user@example.com----example-password----example-user----EXAMPLETOTPSECRET000
-```
-
-Generate a TOTP code manually from the fourth field:
+Print a login code from the fourth field:
 
 ```bash
-python -c "import pyotp; print(pyotp.TOTP('EXAMPLETOTPSECRET000').now())"
+.venv/bin/python -c "import pyotp; print(pyotp.TOTP('EXAMPLETOTPSECRET000').now())"
 ```
 
-## Recording a Manual Flow
-
-`record_camoufox.py` opens Camoufox and records clicks, inputs, and navigation.
+## Docker
 
 ```bash
-.venv/bin/python record_camoufox.py
-.venv/bin/python record_camoufox.py --url https://github.com/login
+cp .env.example .env
+cp config.example.json config.json
+touch .datadome-trust.json
+docker compose up -d --build
 ```
 
-Its output can contain email addresses, session URLs, and selectors. Treat
-`recorded_steps.json` as sensitive local data.
+The compose file publishes no ports; traffic enters through nginx on the external `nginx-network`. Create it once with `docker network create nginx-network`. For a local check, add a `ports` entry.
+
+Bind-mounted files (do not delete): `config.json`, `accounts/`, `.browser-profile/`, `.datadome-trust.json`. Sessions live in memory, so log in again after each restart.
 
 ## Troubleshooting
 
 | Problem | Action |
 | --- | --- |
-| `BAD SITE` | Use a complete domain such as `github.com` for `litensi_site`. |
-| No zone or stock | Use **Check Zone**, choose an in-stock zone, or leave it blank for automatic selection. |
-| No verification email | Check Litensi balance and allow the mailbox reorder retry. |
-| Proxy `405/407` on CONNECT | Scheme/port/auth mismatch in `proxies.txt` (e.g. SOCKS endpoint declared as `http`). Verify with `curl -x <proxy> https://api.ipify.org`. |
-| VPS runs old code | The image is stale — `git pull` then `docker compose up -d --build` on the VPS. |
-| `config.json`/`proxies.txt` became directories | They did not exist before `up`, so docker created folders. `rm -rf` them, create real files (`cp`/`touch`), then `up` again. |
-| VPS IP port 80/443 unreachable | Nothing listening or firewall closed: check `docker ps`, `curl http://127.0.0.1:80` on the host, `ufw status`, and the cloud security group. The app itself exposes no ports — traffic must flow through nginx. |
-| Console returns 403 errors after redeploy | Stale token: sessions live in server memory and die on restart, while the browser keeps the old token. Reload the page — the UI now detects this and returns to the login screen automatically. Just log in again. |
-| DataDome hard block or signup 403 | Change IP/proxy, disable VPN/WARP, then retry after a delay. |
-| Create account or repository will not click | Review Live Log. Native clicks fall back to DOM clicks when an overlay intercepts them. |
-| Web UI does not reflect frontend changes | Run `npm run build`, then restart `python -m web.server`. |
+| Pool has no connectable node | The run goes direct automatically; check your firewall for high outbound ports or switch `nextproxy_type` to `https` |
+| API key returns 401 | The client falls back to the guest pool and logs it; generate a fresh key in the console when you need quota |
+| No verification code in time | The account counts as FAIL and the batch continues; lengthen `otp_timeout_sec` or retry the account later |
+| DataDome hard block or 403 | The runner rotates IP and retries (`proxy_retry_attempts`); when blocks persist, wait before the next batch |
+| Form never appears after reloads | Same as above; datacenter IPs fail this check most, residential IPs pass it most |
+| `config.json` became a directory | Docker created a folder because the file was missing before `up`; remove it, copy the example, and run `up` again |
+| Console shows 403 after redeploy | Sessions die on restart while the browser keeps the old token; reload the page and log in again |
+| UI ignores frontend changes | Run `./run.sh --rebuild`, then restart the server |
 
 ## Security
 
-- Never commit `.env`, `config.json`, `proxies.txt`, `accounts/`,
-  `.browser-profile/`, `.datadome-trust.json`, `github_recovery_codes.txt`,
-  recovery codes, or browser recordings.
-- Account files contain full credentials, including password and TOTP secret.
-- Recovery codes grant account recovery and should be stored securely.
-- Web console auth: username + password from `.env`, 10 failed logins/60s
-  per IP → HTTP 429, sessions are server-side and die on Sign out.
-  Only expose via HTTPS reverse proxy; never enable `TRUST_PROXY` without one.
-- Before pushing, inspect `git status --short` and `git diff --cached`.
+- Never commit `.env`, `config.json`, `accounts/`, `.browser-profile/`, `.datadome-trust.json`, recovery codes, or browser recordings
+- Account files hold full credentials including password and TOTP secret
+- Inspect `git status --short` and `git diff --cached` before every push
 
 ## License
 

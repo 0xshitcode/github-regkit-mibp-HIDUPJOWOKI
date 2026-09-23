@@ -6,9 +6,6 @@ import hashlib
 import logging
 import os
 import random
-import socket
-import socketserver
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -217,14 +214,12 @@ def _proxy_is_socks(proxy: Optional[dict]) -> bool:
     return bool(proxy) and str(proxy.get("server", "")).startswith("socks")
 
 
-def _socks_exit_ip(url: str, timeout: int = 12) -> str:
-    """Resolve the proxy exit IP using the 'socks5h://' scheme (remote DNS).
+def _socks_exit_ip(url: str, timeout: int = 8) -> str:
+    """Resolve the proxy exit IP (remote DNS via socks5h for SOCKS URLs).
 
-    DataImpulse (and similar gateways) reject IP-based connections under a
-    'ruleset' when the client resolves DNS locally (plain socks5://). The
-    requests-based geoip probe inside Camoufox uses plain socks5 and dies with
-    '0x02: Connection not allowed by ruleset' — so we look the exit IP up
-    ourselves over socks5h and hand it to Camoufox via geoip=<ip>.
+    Pool nodes already passed a traffic check in pick_fast, so this is a
+    single quick pass: 2 endpoints, no warm-up sleep. Failure disables geoip
+    pinning but does not block the run.
     """
     import requests as _requests
 
@@ -235,21 +230,16 @@ def _socks_exit_ip(url: str, timeout: int = 12) -> str:
     proxies = {"http": f"{scheme}://{auth}{p.hostname}:{port}",
                "https": f"{scheme}://{auth}{p.hostname}:{port}"}
     last_exc: Exception | None = None
-    # sticky ports can take a few seconds to warm up (allocate the IP) — retry
-    for attempt in range(2):
-        for check_url in ("https://api.ipify.org", "https://icanhazip.com", "https://ifconfig.co/ip"):
-            try:
-                resp = _requests.get(check_url, proxies=proxies, timeout=20)
-                ip = (resp.text or "").strip()
-                if resp.ok and ip:
-                    return ip
-            except Exception as exc:
-                last_exc = exc
-        if attempt == 0:
-            time.sleep(3)  # give the sticky session a moment to warm up
+    for check_url in ("https://api.ipify.org", "https://icanhazip.com"):
+        try:
+            resp = _requests.get(check_url, proxies=proxies, timeout=timeout)
+            ip = (resp.text or "").strip()
+            if resp.ok and ip:
+                return ip
+        except Exception as exc:
+            last_exc = exc
     raise SignupError(f"proxy exit-IP lookup failed: {last_exc} "
-                        f"(check scheme http/https/socks5, user:pass, and port in proxies.txt — "
-                        f"'405/407' = proxy refuses CONNECT/auth)")
+                      f"('405/407' = proxy refuses CONNECT/auth)")
 
 
 # ---------------------------------------------------------------------------
@@ -295,219 +285,9 @@ def _ensure_sticky_proxy(url: str, log=None) -> str:
     return url.strip()  # already sticky or non-DataImpulse — untouched
 
 
-# ---------------------------------------------------------------------------
-# Local auth proxy bridge
-#
-# Firefox does not support authenticated SOCKS5 proxies ("Browser does not
-# support socks5 proxy authentication") and many gateways reject locally
-# resolved DNS (socks5://). The bridge listens as a plain local HTTP proxy
-# (no auth — Firefox loves that) and relays CONNECT/GET traffic to the
-# upstream gateway with the credentials injected, resolving DNS remotely.
-# Same pattern as LocalAuthProxyBridge in grok-regkit.
-# ---------------------------------------------------------------------------
-
-_UPSTREAM: dict = {}
-
-
-class _AuthBridgeHandler(socketserver.BaseRequestHandler):
-    def _relay(self, src: socket.socket, dst: socket.socket, timeout: float = 180.0) -> None:
-        """Bidirectional relay using two pump threads (blocking one-way relay
-        deadlocks TLS: the handshake needs simultaneous both-direction I/O)."""
-        src.settimeout(timeout)
-        dst.settimeout(timeout)
-
-        def pump(a: socket.socket, b: socket.socket) -> None:
-            try:
-                while True:
-                    data = a.recv(65536)
-                    if not data:
-                        break
-                    b.sendall(data)
-            except OSError:
-                pass
-            finally:
-                for sock in (a, b):
-                    try:
-                        sock.shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass
-
-        t1 = threading.Thread(target=pump, args=(src, dst), daemon=True)
-        t2 = threading.Thread(target=pump, args=(dst, src), daemon=True)
-        t1.start()
-        t2.start()
-        t1.join()
-        t2.join()
-
-    def _connect_upstream(self) -> socket.socket:
-        s = socket.create_connection((_UPSTREAM["host"], _UPSTREAM["port"]), timeout=20)
-        if _UPSTREAM["socks"]:
-            # minimal SOCKS5 handshake with remote DNS (ATYP=0x03 hostname)
-            s.sendall(b"\x05\x01\x02")  # greet: support user/pass auth
-            resp = s.recv(2)
-            if len(resp) < 2 or resp[0] != 5:
-                raise OSError("socks5: bad greeting")
-            if resp[1] == 0x02:
-                user = _UPSTREAM["user"].encode()
-                pwd = _UPSTREAM["pass"].encode()
-                s.sendall(bytes([1, len(user)]) + user + bytes([len(pwd)]) + pwd)
-                resp = s.recv(2)
-                if len(resp) < 2 or resp[1] != 0:
-                    raise OSError("socks5: auth rejected")
-            elif resp[1] != 0x00:
-                raise OSError("socks5: no acceptable auth method")
-        return s
-
-    def _socks5_connect_remote(self, s: socket.socket, host: str, port: int) -> None:
-        """SOCKS5 CONNECT with hostname (ATYP=0x03) so DNS resolves at the gateway."""
-        h = host.encode()
-        s.sendall(b"\x05\x01\x00\x03" + bytes([len(h)]) + h + port.to_bytes(2, "big"))
-        resp = s.recv(10)
-        if len(resp) < 2 or resp[1] != 0:
-            raise OSError(f"socks5: connect failed code={resp[1] if len(resp) > 1 else '?'}")
-
-    def _inject_auth_header(self, data: bytes) -> bytes:
-        """Rewrite/add 'Proxy-Authorization: Basic ...' on the first request."""
-        if not _UPSTREAM.get("user"):
-            return data
-        import base64
-
-        token = base64.b64encode(f"{_UPSTREAM['user']}:{_UPSTREAM['pass']}".encode()).decode()
-        head, sep, rest = data.partition(b"\r\n\r\n")
-        if not sep:
-            return data
-        lines = head.split(b"\r\n")
-        out = [lines[0]]
-        for ln in lines[1:]:
-            if ln.lower().startswith(b"proxy-authorization:"):
-                continue  # drop existing
-            out.append(ln)
-        out.append(f"Proxy-Authorization: Basic {token}".encode())
-        return b"\r\n".join(out) + b"\r\n\r\n" + rest
-
-    def handle(self) -> None:
-        try:
-            self.request.settimeout(20)
-            first = self.request.recv(65536)
-            if not first:
-                return
-            if first[:7] == b"CONNECT":
-                # --- HTTPS tunnel ---
-                line = first.split(b"\r\n", 1)[0]
-                hostport = line.split()[1].decode()
-                host, _, port_s = hostport.rpartition(":")
-                port = int(port_s or "443")
-                upstream = self._connect_upstream()
-                if _UPSTREAM["socks"]:
-                    # SOCKS5 CONNECT with remote DNS, then tell the browser the
-                    # tunnel is up — do NOT wait for upstream data (deadlock:
-                    # upstream waits for the browser's TLS ClientHello).
-                    self._socks5_connect_remote(upstream, host, port)
-                    self.request.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
-                else:
-                    # HTTP upstream: forward CONNECT with auth injected, relay
-                    # the gateway's own 2xx reply to the browser
-                    authed = self._inject_auth_header(first)
-                    upstream.sendall(authed)
-                    reply = self._wait_http_connect_reply(upstream)
-                    self.request.sendall(reply)
-                self._relay(self.request, upstream)
-            else:
-                # --- plain HTTP: forward the full request with auth injected ---
-                upstream = self._connect_upstream()
-                upstream.sendall(self._inject_auth_header(first))
-                self._relay(self.request, upstream)
-        except OSError:
-            pass
-        finally:
-            try:
-                self.request.close()
-            except OSError:
-                pass
-
-    @staticmethod
-    def _wait_http_connect_reply(upstream: socket.socket, timeout: float = 20.0) -> bytes:
-        """Read the upstream HTTP proxy's CONNECT reply (up to the blank line)."""
-        upstream.settimeout(timeout)
-        buf = b""
-        while b"\r\n\r\n" not in buf and len(buf) < 8192:
-            chunk = upstream.recv(4096)
-            if not chunk:
-                break
-            buf += chunk
-        return buf or b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
-
-
-class LocalAuthProxyBridge:
-    """Run a local no-auth HTTP proxy that forwards to an authed upstream.
-
-    Use for SOCKS5-with-auth upstreams (Firefox can't authenticate to SOCKS5)
-    or HTTP upstreams behind DataDome-style rulesets. DNS for CONNECT is
-    resolved at the gateway (hostname-based SOCKS5 ATYP=0x03).
-    """
-
-    def __init__(self, proxy_url: str):
-        p = urlsplit(proxy_url.strip())
-        scheme = (p.scheme or "http").lower()
-        if scheme in ("socks", "socks5", "socks5h"):
-            scheme = "socks5"
-        if not p.hostname:
-            raise SignupError(f"invalid proxy url for bridge: {proxy_url}")
-        self._upstream = {
-            "host": p.hostname,
-            "port": p.port or (1080 if scheme == "socks5" else 8080),
-            "user": p.username or "",
-            "pass": p.password or "",
-            "socks": scheme == "socks5",
-        }
-        self._server: Optional[socketserver.ThreadingTCPServer] = None
-        self.port: Optional[int] = None
-
-    def start(self) -> int:
-        global _UPSTREAM
-        _UPSTREAM = self._upstream
-        for attempt in range(20):
-            candidate = 20000 + (os.getpid() % 10000) + attempt * 7
-            try:
-                self._server = socketserver.ThreadingTCPServer(
-                    ("127.0.0.1", candidate), _AuthBridgeHandler
-                )
-                self._server.daemon_threads = True
-                self.port = candidate
-                threading.Thread(target=self._server.serve_forever, daemon=True).start()
-                return candidate
-            except OSError:
-                continue
-        raise SignupError("local auth proxy bridge: no free port found")
-
-    def stop(self) -> None:
-        if self._server:
-            try:
-                self._server.shutdown()
-                self._server.server_close()
-            except Exception:
-                pass
-            self._server = None
-
-    def browser_proxy(self) -> dict:
-        """Playwright proxy dict pointing at the local bridge (no auth)."""
-        return {"server": f"http://127.0.0.1:{self.port}"}
-
-
-_bridge: Optional[LocalAuthProxyBridge] = None
-
-
-def _stop_proxy_bridge() -> None:
-    global _bridge
-    if _bridge is not None:
-        _bridge.stop()
-        _bridge = None
-
-
 def _rotate_sticky_proxy() -> None:
     """Discard the current proxy and force a fresh pick on next use."""
     global _sticky_suffix, _last_exit_ip
-    _stop_proxy_bridge()
     _sticky_suffix = None
     _last_exit_ip = None
     _NEXTPROXY_CACHE.update({"at": 0.0, "urls": []})
@@ -524,35 +304,6 @@ _IP_FAILURE_MARKERS = (
 def _looks_ip_related(exc: BaseException) -> bool:
     msg = str(exc).lower()
     return any(m in msg for m in _IP_FAILURE_MARKERS)
-
-
-def _disable_blocked_proxy(log) -> None:
-    """Tell the proxy rotator to permanently disable the current upstream proxy.
-
-    POST to http://127.0.0.1:8100/disable — the rotator comments out the proxy
-    in the live pool cache so it's never used again.
-    """
-    try:
-        import urllib.request
-        req = urllib.request.Request(
-            "http://127.0.0.1:8100/disable",
-            data=b"{}",
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        resp = urllib.request.urlopen(req, timeout=5)
-        data = json.loads(resp.read())
-        if data.get("ok"):
-            log(f"[!] permanently disabled proxy: {data.get('disabled')} ({data.get('remaining')} remaining)")
-        else:
-            log(f"[i] proxy disable: {data}")
-    except Exception as exc:
-        log(f"[i] could not disable proxy via rotator: {exc}")
-
-
-def _proxy_needs_bridge(proxy: Optional[dict]) -> bool:
-    """Firefox rejects authed SOCKS5; bridge it locally."""
-    return bool(proxy) and str(proxy.get("server", "")).startswith("socks") and proxy.get("username")
 
 
 def _page_text(page) -> str:
@@ -1126,21 +877,8 @@ def _browser_ctx_options(cfg: Config, log=None) -> dict:
     proxy_url = _ensure_sticky_proxy(raw_proxy, log=log) if raw_proxy else ""
     proxy = _parse_proxy(proxy_url) if proxy_url else None
     if proxy:
-        if _proxy_needs_bridge(proxy):
-            # Firefox cannot authenticate to SOCKS5 — run a local no-auth HTTP
-            # bridge that relays to the authed upstream with remote DNS.
-            # Reuse an already-running bridge so a NEW bridge is NOT started
-            # for every fresh-profile launch (bridge is sticky-session-bound).
-            global _bridge
-            if _bridge is None:
-                _bridge = LocalAuthProxyBridge(proxy_url)
-                _bridge.start()
-                if log:
-                    log(f"[*] local auth bridge 127.0.0.1:{_bridge.port} -> "
-                        f"{proxy['server']} (socks5 auth handled locally)")
-            opts["proxy"] = _bridge.browser_proxy()
-        else:
-            opts["proxy"] = proxy
+        # No-auth public pool: pass the proxy straight to the browser.
+        opts["proxy"] = proxy
         if _proxy_is_socks(proxy):
             try:
                 exit_ip = _socks_exit_ip(proxy_url)
@@ -2222,7 +1960,6 @@ def register_one(
                     raise
                 hard_left -= 1
                 log(f"[!] DataDome hard block ({exc}); disabling proxy + rotating, {hard_left} retries left")
-                _disable_blocked_proxy(log)
                 _rotate_sticky_proxy()
                 _sleep_with_cancel(5, stop)
             except GitHubRateLimited as exc:
@@ -2347,7 +2084,6 @@ def run_job(
         # inside register_one. This is expected control flow, not a job error.
         log("[!] stop requested — job ended cleanly")
     finally:
-        _stop_proxy_bridge()  # stop the local auth bridge if it was started
         log(f"[*] done: OK {ok} | FAIL {fail}")
         _emit_progress(ok, fail)  # final snapshot
     return ok, fail, out

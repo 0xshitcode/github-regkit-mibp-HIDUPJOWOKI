@@ -345,7 +345,6 @@ def main() -> int:
         else:
             print(f"\n[!] recorder error: {exc}", flush=True)
     finally:
-        runner._stop_proxy_bridge()  # stop local auth bridge if it was started
         if events:
             _dump(events, args.out)
         else:

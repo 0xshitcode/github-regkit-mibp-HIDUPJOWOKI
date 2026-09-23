@@ -141,20 +141,30 @@ class NextProxyClient:
         the socket then reset on real traffic. So each candidate must also pass
         a real HTTPS GET through itself. '' if none.
         """
+        import concurrent.futures as _fut
         import re
 
         import requests as _requests
 
-        for url in self.fetch_urls(limit=limit, proxy_type=proxy_type, **kw)[: max(1, max_probes)]:
+        def _check(url: str) -> str:
             if self.probe(url, timeout=timeout) < 0:
-                continue
+                return ""
             try:
                 resp = _requests.get("https://api.ipify.org", proxies={"http": url, "https": url},
                                      timeout=10)
                 if resp.ok and re.match(r"^\d+\.\d+\.\d+\.\d+\s*$", resp.text or ""):
                     return url
             except Exception:
-                continue
+                pass
+            return ""
+
+        cands = self.fetch_urls(limit=limit, proxy_type=proxy_type, **kw)[: max(1, max_probes)]
+        with _fut.ThreadPoolExecutor(max_workers=min(len(cands), max_probes)) as ex:
+            # dict preserves submission order: first URL in pool order that works wins
+            results = dict(zip(cands, ex.map(_check, cands)))
+        for url in cands:
+            if results.get(url):
+                return url
         return ""
 
     def verify(self, target: str) -> dict:

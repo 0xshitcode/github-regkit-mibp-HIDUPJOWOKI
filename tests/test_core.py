@@ -184,10 +184,12 @@ def test_run_job_aborts_on_fatal_provider_error():
     assert calls["n"] == 1, f"fatal provider error must abort after 1 attempt (ran {calls['n']})"
 
 
-def test_register_one_retries_same_account_with_fresh_ip():
+def test_register_one_retries_same_account_with_fresh_ip(monkeypatch):
     """IP-ish SignupError rotates the IP and retries the same account."""
     from github_register import runner
     from github_register.config import Config
+
+    monkeypatch.setattr(runner, "_sleep_with_cancel", lambda *a, **k: None)
 
     cfg = Config(proxy_retry_attempts=2)
     calls = {"n": 0}
@@ -215,10 +217,12 @@ def test_register_one_retries_same_account_with_fresh_ip():
     assert rotated["n"] == 2, f"expected 2 rotations, got {rotated['n']}"
 
 
-def test_register_one_gives_up_after_ip_retries():
+def test_register_one_gives_up_after_ip_retries(monkeypatch):
     """Persistent IP failures fail the account (None), not hang/test forever."""
     from github_register import runner
     from github_register.config import Config
+
+    monkeypatch.setattr(runner, "_sleep_with_cancel", lambda *a, **k: None)
 
     cfg = Config(proxy_retry_attempts=1)
 

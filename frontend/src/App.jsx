@@ -55,6 +55,7 @@ export default function App() {
       .then((d) => setAuth({ needs: d.needs_auth }))
       .catch(() => setAuth({ needs: true }));
   }, []);
+  // Badge-only freshness: StatusPanel owns the 1.5s poll when visible.
   useEffect(() => {
     if (auth?.needs && !getToken()) return undefined;
     const timer = setInterval(
@@ -63,7 +64,7 @@ export default function App() {
           .get("/api/status")
           .then((d) => setRunning(!!d.running))
           .catch(() => {}),
-      2500,
+      10000,
     );
     return () => clearInterval(timer);
   }, [auth]);
