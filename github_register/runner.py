@@ -1252,6 +1252,8 @@ def _create_repository(page, username: str, base_name: str, log) -> str:
     deadline = time.time() + 30
     while time.time() < deadline:
         url = page.url or ""
+        if "/login" in url:
+            raise SignupError(f"session bounced to login during repo create; url={url}")
         if "/new" not in url and f"/{username}/" in url:
             log(f"[*] repository created: {url}")
             return name
@@ -1307,6 +1309,8 @@ def _complete_profile(page, username: str, cfg: Config, log) -> None:
         profile = _fetch_public_profile() if not all(custom.values()) else {}
         profile = {key: custom[key] or profile[key] for key in custom}
     page.goto(f"https://github.com/{username}", wait_until="domcontentloaded", timeout=60_000)
+    if "/login" in (page.url or ""):
+        raise SignupError(f"profile page bounced to login (session revoked); url={page.url}")
 
     if cfg.set_profile_status:
         status = cfg.profile_status.strip() or "On vacation"
@@ -1426,6 +1430,8 @@ def _enable_2fa(page, log) -> tuple[str, str]:
     import pyotp
 
     page.goto("https://github.com/settings/security", wait_until="domcontentloaded", timeout=60_000)
+    if "/login" in (page.url or ""):
+        raise SignupError(f"security settings bounced to login (session revoked); url={page.url}")
     try:
         page.wait_for_selector("#settings-frame", state="visible", timeout=30_000)
     except Exception:
@@ -1703,6 +1709,40 @@ def _fill_signup_form(page, cfg, email, password, log, stop) -> str:
     )
 
 
+def _session_bounced(page) -> bool:
+    """Did GitHub bounce an authed page to /login?
+
+    The `logged_in=yes` cookie is JS-set and can linger after GitHub's risk
+    engine revokes the server session — the bounce itself is the signal.
+    """
+    return "/login" in (page.url or "")
+
+
+def _with_reauth_stage(page, context, cfg, email, password, mail, order_id,
+                       used_codes, log, stop, label, fn):
+    """Run one post-signup stage; on a login bounce, re-login and retry once.
+
+    Fresh automated sessions are sometimes revoked mid-run while the stale
+    cookie lingers, so a bounce here re-authenticates (device-verification
+    codes included, via the same mailbox) instead of skipping the stage.
+    """
+    try:
+        return fn()
+    except Exception as exc:
+        if not _session_bounced(page):
+            raise
+        log(f"[*] {label}: session bounced to login — re-authenticating and retrying once")
+        ok = _try_login(
+            page, email, password, context, log, mail=mail,
+            order_id=order_id, email=email,
+            otp_timeout=cfg.otp_timeout_sec,
+            used_codes=used_codes, stop=stop,
+        )
+        if not ok:
+            raise SignupError(f"{label}: re-login failed after bounce ({exc})")
+        return fn()
+
+
 def _post_form_flow(
     page, context, cfg: Config, email: str, password: str, username: str,
     mail, order_id: str, log, stop,
@@ -1747,18 +1787,30 @@ def _post_form_flow(
             # ---- stage 4: create first repository ----
             if cfg.create_repo:
                 try:
-                    _create_repository(page, username, cfg.repo_name, log)
+                    _with_reauth_stage(
+                        page, context, cfg, email, password, mail,
+                        order_id, used_codes, log, stop, "create repo",
+                        lambda: _create_repository(page, username, cfg.repo_name, log),
+                    )
                 except Exception as exc:
                     log(f"[i] create repo stage skipped: {exc}")
             # ---- stage 5: enable TOTP 2FA ----
             if cfg.enable_2fa:
                 try:
-                    totp_secret, recovery = _enable_2fa(page, log)
+                    totp_secret, recovery = _with_reauth_stage(
+                        page, context, cfg, email, password, mail,
+                        order_id, used_codes, log, stop, "2FA",
+                        lambda: _enable_2fa(page, log),
+                    )
                 except Exception as exc:
                     log(f"[i] 2FA stage failed (account still saved): {exc}")
             _save_recovery_per_account(email, recovery, log)
             try:
-                _complete_profile(page, username, cfg, log)
+                _with_reauth_stage(
+                    page, context, cfg, email, password, mail,
+                    order_id, used_codes, log, stop, "profile",
+                    lambda: _complete_profile(page, username, cfg, log),
+                )
             except Exception as exc:
                 log(f"[i] profile stage skipped (account still saved): {exc}")
         try:

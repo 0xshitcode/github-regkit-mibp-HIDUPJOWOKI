@@ -329,3 +329,90 @@ def test_fill_signup_form_rewaits_stale_form(monkeypatch):
     got = runner._fill_signup_form(page, Config(), "a@b.com", "Pw12345678!", lambda m: None, lambda: False)
     assert got == "someuser"
     assert page.ready_polls >= 3
+
+
+class _StagePage:
+    """Minimal page double: only .url matters to the re-auth wrapper."""
+
+    def __init__(self, url):
+        self.url = url
+
+
+def _stage_cfg(**kw):
+    from github_register.config import Config
+
+    return Config(**kw)
+
+
+def test_reauth_stage_retries_after_bounce(monkeypatch):
+    """Login bounce -> re-login -> stage retried once."""
+    from github_register import runner
+
+    page = _StagePage("https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fnew")
+    calls = {"stage": 0, "login": 0}
+
+    def _ok_login(*a, **k):
+        calls["login"] += 1
+        page.url = "https://github.com/new"
+        return True
+
+    def _flaky():
+        calls["stage"] += 1
+        if calls["stage"] == 1:
+            raise runner.SignupError("session bounced to login during repo create")
+        return "hello"
+
+    monkeypatch.setattr(runner, "_try_login", _ok_login)
+    got = runner._with_reauth_stage(
+        page, object(), _stage_cfg(), "a@b.com", "Pw12345678!",
+        None, "oid", set(), lambda m: None, lambda: False,
+        "create repo", _flaky,
+    )
+    assert got == "hello"
+    assert calls == {"stage": 2, "login": 1}
+
+
+def test_reauth_stage_no_bounce_propagates(monkeypatch):
+    """No bounce -> original error propagates, no re-login attempted."""
+    from github_register import runner
+
+    page = _StagePage("https://github.com/new")
+    calls = {"login": 0}
+
+    def _no_login(*a, **k):
+        calls["login"] += 1
+        return True
+
+    def _bad():
+        raise runner.SignupError("Create repository stayed disabled")
+
+    monkeypatch.setattr(runner, "_try_login", _no_login)
+    try:
+        runner._with_reauth_stage(
+            page, object(), _stage_cfg(), "a@b.com", "Pw12345678!",
+            None, "oid", set(), lambda m: None, lambda: False,
+            "create repo", _bad,
+        )
+    except runner.SignupError as exc:
+        assert "stayed disabled" in str(exc)
+    else:
+        raise AssertionError("expected SignupError")
+    assert calls["login"] == 0
+
+
+def test_reauth_stage_failed_relogin_raises(monkeypatch):
+    """Bounce + failed re-login -> SignupError mentioning the stage."""
+    from github_register import runner
+
+    page = _StagePage("https://github.com/login?return_to=%2Fsettings%2Fsecurity")
+    monkeypatch.setattr(runner, "_try_login", lambda *a, **k: False)
+    try:
+        runner._with_reauth_stage(
+            page, object(), _stage_cfg(), "a@b.com", "Pw12345678!",
+            None, "oid", set(), lambda m: None, lambda: False,
+            "2FA", lambda: (_ for _ in ()).throw(runner.SignupError("bounced")),
+        )
+    except runner.SignupError as exc:
+        assert "2FA" in str(exc) and "re-login failed" in str(exc)
+    else:
+        raise AssertionError("expected SignupError")
