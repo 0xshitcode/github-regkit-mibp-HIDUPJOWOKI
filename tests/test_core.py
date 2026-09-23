@@ -184,6 +184,78 @@ def test_run_job_aborts_on_fatal_provider_error():
     assert calls["n"] == 1, f"fatal provider error must abort after 1 attempt (ran {calls['n']})"
 
 
+def test_register_one_retries_same_account_with_fresh_ip():
+    """IP-ish SignupError rotates the IP and retries the same account."""
+    from github_register import runner
+    from github_register.config import Config
+
+    cfg = Config(proxy_retry_attempts=2)
+    calls = {"n": 0}
+    rotated = {"n": 0}
+    orig_signup = runner._run_signup
+    orig_rotate = runner._rotate_sticky_proxy
+
+    def _flaky(cfg, password, mail, provider, pending, log, stop):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise runner.SignupError("email form did not appear (no challenge marker)")
+        pending["email"] = "t@x.com"
+        pending["order_id"] = "t%40x.com|tok|server-1"
+        return ("user1", "TOTPA", "RECOVERY")
+
+    runner._run_signup = _flaky
+    runner._rotate_sticky_proxy = lambda: rotated.__setitem__("n", rotated["n"] + 1)
+    try:
+        result = runner.register_one(cfg, log=lambda m: None)
+    finally:
+        runner._run_signup = orig_signup
+        runner._rotate_sticky_proxy = orig_rotate
+    assert result is not None and result.split("----")[2] == "user1", result
+    assert calls["n"] == 3, f"expected 3 attempts, got {calls['n']}"
+    assert rotated["n"] == 2, f"expected 2 rotations, got {rotated['n']}"
+
+
+def test_register_one_gives_up_after_ip_retries():
+    """Persistent IP failures fail the account (None), not hang/test forever."""
+    from github_register import runner
+    from github_register.config import Config
+
+    cfg = Config(proxy_retry_attempts=1)
+
+    def _always_blocked(*args, **kwargs):
+        raise runner.SignupError("Page.goto: Timeout 60000ms exceeded")
+
+    orig = runner._run_signup
+    runner._run_signup = _always_blocked
+    try:
+        result = runner.register_one(cfg, log=lambda m: None)
+    finally:
+        runner._run_signup = orig
+    assert result is None
+
+
+def test_non_ip_signup_error_does_not_rotate():
+    """Non-IP errors (e.g. bad credentials state) fail fast without burning retries."""
+    from github_register import runner
+    from github_register.config import Config
+
+    cfg = Config(proxy_retry_attempts=2)
+    calls = {"n": 0}
+    orig = runner._run_signup
+
+    def _bad(*args, **kwargs):
+        calls["n"] += 1
+        raise runner.SignupError("unexpected page layout v42")
+
+    runner._run_signup = _bad
+    try:
+        result = runner.register_one(cfg, log=lambda m: None)
+    finally:
+        runner._run_signup = orig
+    assert result is None
+    assert calls["n"] == 1, f"non-IP error must not retry, ran {calls['n']}x"
+
+
 if __name__ == "__main__":
     for name, fn in sorted((n, f) for n, f in globals().items() if n.startswith("test_")):
         fn()

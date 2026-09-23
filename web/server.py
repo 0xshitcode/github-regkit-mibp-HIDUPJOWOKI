@@ -319,6 +319,7 @@ class ConfigBody(BaseModel):
     fresh_profile: Optional[bool] = None
     proxy_hard_block_retries: Optional[int] = None
     proxy_rate_limit_retries: Optional[int] = None
+    proxy_retry_attempts: Optional[int] = None
     create_repo: Optional[bool] = None
     repo_name: Optional[str] = None
     enable_2fa: Optional[bool] = None

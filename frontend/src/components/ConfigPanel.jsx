@@ -30,6 +30,7 @@ const ADV_FIELDS = [
   { key: "browser_profile_dir", label: "Browser profile dir (DataDome trust)", group: "Advanced", wide: true },
   { key: "proxy_hard_block_retries", label: "Proxy retries after DataDome hard block", type: "number", group: "Advanced" },
   { key: "proxy_rate_limit_retries", label: "IP rotation/retries after rate limit", type: "number", group: "Advanced" },
+  { key: "proxy_retry_attempts", label: "Auto-retry same account with fresh IP on IP/proxy failure", type: "number", group: "Advanced" },
   { key: "fresh_profile", label: "Fresh browser per account (incognito-like with cloned DataDome cookie)", type: "checkbox", group: "Advanced", wide: true },
 ];
 

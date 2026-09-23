@@ -513,6 +513,19 @@ def _rotate_sticky_proxy() -> None:
     _NEXTPROXY_CACHE.update({"at": 0.0, "urls": []})
 
 
+_IP_FAILURE_MARKERS = (
+    "timeout", "timed out", "blocked", "datadome", "403", "forbidden",
+    "captcha-delivery", "form not ready", "email form did not appear",
+    "no challenge marker", "proxy", "connection", "network", "unreachable",
+    "reset by peer", "socks", "exit-ip", "risk check",
+)
+
+
+def _looks_ip_related(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(m in msg for m in _IP_FAILURE_MARKERS)
+
+
 def _disable_blocked_proxy(log) -> None:
     """Tell the proxy rotator to permanently disable the current upstream proxy.
 
@@ -2192,9 +2205,12 @@ def register_one(
     succeeded = False
     try:
         password = generate_password()
-        has_proxy = bool((getattr(cfg, "nextproxy_api_key", "") or "").strip())
+        # Proxy pool is always attempted (guest pool needs no key); worst case
+        # the flow goes direct. Retries therefore always make sense.
+        has_proxy = True
         hard_left = int(getattr(cfg, "proxy_hard_block_retries", 0) or 0) if has_proxy else 0
         rate_left = int(getattr(cfg, "proxy_rate_limit_retries", 0) or 0) if has_proxy else 0
+        ip_left = int(getattr(cfg, "proxy_retry_attempts", 2) or 0)
         while True:
             _raise_if_cancelled(stop)
             try:
@@ -2218,6 +2234,17 @@ def register_one(
                     f"{rate_left} retries left")
                 _rotate_sticky_proxy()
                 _sleep_with_cancel(8, stop)
+            except SignupError as exc:
+                # RegistrationCancelled (Stop pressed) must never be retried.
+                if isinstance(exc, RegistrationCancelled):
+                    raise
+                if ip_left <= 0 or not _looks_ip_related(exc):
+                    raise
+                ip_left -= 1
+                log(f"[!] IP/proxy failure ({str(exc)[:120]}); rotating IP + retrying same account, "
+                    f"{ip_left} retries left")
+                _rotate_sticky_proxy()
+                _sleep_with_cancel(5, stop)
         # Recovery codes are stored in accounts/recovery/<email-hash>.txt.
         # This fifth marker lets the account UI show the recovery-code action
         # without exposing the codes in the main account list.

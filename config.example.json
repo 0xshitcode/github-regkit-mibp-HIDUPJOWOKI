@@ -17,6 +17,7 @@
   "fresh_profile": true,
   "proxy_hard_block_retries": 2,
   "proxy_rate_limit_retries": 2,
+  "proxy_retry_attempts": 2,
   "create_repo": true,
   "repo_name": "hello",
   "enable_2fa": true,
