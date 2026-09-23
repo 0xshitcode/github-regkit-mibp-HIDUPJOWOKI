@@ -31,6 +31,27 @@ class NextProxyError(RuntimeError):
     pass
 
 
+_DIRECT_IP: Optional[str] = None
+
+
+def direct_exit_ip(timeout: float = 8.0) -> Optional[str]:
+    """This host's real exit IP (bare lookup, no proxy) — cached per process.
+
+    Used to reject transparent proxies whose exit IP equals ours: such a
+    node "works" but leaks the real IP, which defeats proxy_required.
+    """
+    global _DIRECT_IP
+    if _DIRECT_IP is None:
+        try:
+            import requests as _requests
+
+            txt = (_requests.get("https://api.ipify.org", timeout=timeout).text or "").strip()
+            _DIRECT_IP = txt or ""
+        except Exception:
+            _DIRECT_IP = ""
+    return _DIRECT_IP or None
+
+
 class NextProxyClient:
     def __init__(self, api_key: str = "", base: str = CONSOLE_BASE, timeout: int = 20):
         self.api_key = (api_key or "").strip()
@@ -85,8 +106,15 @@ class NextProxyClient:
         country: str = "",
         max_latency: int = 0,
         sort: str = "",
+        allow_transparent: bool = False,
     ) -> list[dict]:
-        """Raw node dicts, unmasked+unlocked only, sorted fastest-first."""
+        """Raw node dicts, unmasked+unlocked only, sorted fastest-first.
+
+        Transparent proxies are excluded by default: they forward the real
+        exit IP in headers, which defeats proxy_required (worse than failing).
+        (The API's `anonymity=` filter returns zero rows on the free tier, so
+        filter client-side on the node's `anonymity` field.)
+        """
         params: dict[str, Any] = {"limit": max(1, min(limit, 100))}
         if proxy_type and proxy_type != "all":
             params["type"] = proxy_type
@@ -102,6 +130,7 @@ class NextProxyClient:
             n for n in nodes
             if isinstance(n, dict) and not n.get("masked") and not n.get("isLocked") and n.get("ip") and n.get("port")
             and "•" not in str(n.get("ip", "")) and "•" not in str(n.get("port", ""))
+            and (allow_transparent or str(n.get("anonymity") or "").lower() != "transparent")
         ]
         usable.sort(key=lambda n: float(n.get("latency") or n.get("rawLatency") or 9e9))
         return usable
@@ -139,7 +168,9 @@ class NextProxyClient:
 
         TCP connect alone is not enough — transparent/filtering proxies accept
         the socket then reset on real traffic. So each candidate must also pass
-        a real HTTPS GET through itself. '' if none.
+        a real HTTPS GET through itself. The returned URL uses the WORKING
+        scheme (http fallback for https-labeled nodes), and nodes whose exit
+        IP equals ours (transparent, identity-leaking) are rejected. '' if none.
         """
         import concurrent.futures as _fut
         import re
@@ -147,15 +178,26 @@ class NextProxyClient:
         import requests as _requests
 
         def _check(url: str) -> str:
-            if self.probe(url, timeout=timeout) < 0:
-                return ""
-            try:
-                resp = _requests.get("https://api.ipify.org", proxies={"http": url, "https": url},
-                                     timeout=10)
-                if resp.ok and re.match(r"^\d+\.\d+\.\d+\.\d+\s*$", resp.text or ""):
-                    return url
-            except Exception:
-                pass
+            # Pool "https" means "relays HTTPS targets", not "speaks TLS":
+            # live nodes are usually plain-HTTP forward proxies (CONNECT for
+            # HTTPS targets), so try the http scheme when https fails.
+            cands = [url]
+            if url.startswith("https://"):
+                cands.append("http://" + url[len("https://"):])
+            mine = direct_exit_ip()
+            for cand in cands:
+                if self.probe(cand, timeout=timeout) < 0:
+                    continue
+                try:
+                    resp = _requests.get("https://api.ipify.org", proxies={"http": cand, "https": cand},
+                                         timeout=10)
+                    exit_ip = (resp.text or "").strip()
+                    if resp.ok and re.match(r"^\d+\.\d+\.\d+\.\d+\s*$", exit_ip or ""):
+                        if mine and exit_ip == mine:
+                            continue  # transparent: exit == our real IP, leaks identity
+                        return cand  # return the WORKING scheme, not the labeled one
+                except Exception:
+                    continue
             return ""
 
         cands = self.fetch_urls(limit=limit, proxy_type=proxy_type, **kw)[: max(1, max_probes)]

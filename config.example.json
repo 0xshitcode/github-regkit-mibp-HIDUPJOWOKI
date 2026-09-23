@@ -5,7 +5,7 @@
   "nextproxy_api_key": "",
   "nextproxy_type": "socks5",
   "nextproxy_country": "",
-  "nextproxy_limit": 20,
+  "nextproxy_limit": 100,
   "nextproxy_max_latency": 0,
   "proxy_required": true,
   "register_count": 1,
