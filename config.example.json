@@ -7,6 +7,7 @@
   "nextproxy_country": "",
   "nextproxy_limit": 20,
   "nextproxy_max_latency": 0,
+  "proxy_required": true,
   "register_count": 1,
   "headless": false,
   "delay_sec": 5.0,

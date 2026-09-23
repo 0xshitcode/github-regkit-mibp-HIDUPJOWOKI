@@ -21,7 +21,7 @@ cd github-regkit
 
 ## How it works
 
-1. The runner picks a healthy proxy from the NextProxy live pool (TCP plus HTTPS checked, fastest first) or goes direct when the pool is unusable
+1. The runner picks a healthy proxy from the NextProxy live pool (TCP plus HTTPS checked, whole pool probed); without a working node the run FAILS — direct connections are forbidden so the real IP never leaks
 2. Camoufox (anti-detect Firefox) opens the signup page and waits out DataDome
 3. Only then it creates a PakMail inbox on server-2, so no mailbox time burns during bot checks
 4. It fills email, password, and username, submits, and reads the 8-digit launch code from the inbox (list plus detail endpoint)
@@ -33,7 +33,7 @@ Post-signup failures never discard a verified account. The reason lands in the l
 ## Features
 
 - **Automatic IP rotation**: DataDome blocks, rate limits, and proxy failures trigger a fresh IP plus a retry of the same account (`proxy_retry_attempts`, default 2)
-- **Health-gated proxy pool**: dead or filtering proxies are skipped before the browser starts; direct mode is the fallback, not a failure
+- **Proxy mandatory**: dead or filtering proxies are skipped before the browser starts; an empty pool fails the account (retry re-fetches the pool) instead of going direct
 - **Inbox access links**: every account saves a shareable PakMail link in `accounts/email_links.json`; copy or open it from **Accounts**
 - **Re-poll inbox code**: re-read the same inbox for a new code (2 minute cap, manual stop), no reorder bookkeeping
 - **Account management**: groups, merge files, export TXT/CSV/JSON, TOTP codes, recovery codes
@@ -61,6 +61,7 @@ Edit `config.json` (never commit this file):
   "nextproxy_country": "",
   "nextproxy_limit": 20,
   "nextproxy_max_latency": 0,
+  "proxy_required": true,
   "register_count": 1,
   "headless": false,
   "otp_timeout_sec": 240,
@@ -78,6 +79,7 @@ Edit `config.json` (never commit this file):
 | `nextproxy_country` | Two-letter filter such as `DE`; blank means any country |
 | `nextproxy_limit` | Pool size per fetch (max 100 for guests) |
 | `nextproxy_max_latency` | Drop nodes slower than this in ms; `0` means no filter |
+| `proxy_required` | `true` means fail without a working proxy; never go direct |
 | `register_count` | Accounts per job |
 | `headless` | Hide the browser window; visible mode passes bot checks more often |
 | `otp_timeout_sec` | Seconds to wait for the verification mail per account |
@@ -161,7 +163,7 @@ Bind-mounted files (do not delete): `config.json`, `accounts/`, `.browser-profil
 
 | Problem | Action |
 | --- | --- |
-| Pool has no connectable node | The run goes direct automatically; check your firewall for high outbound ports or switch `nextproxy_type` to `https` |
+| Pool has no connectable node | The account fails (`proxy_required`) and the retry re-fetches the pool; check the pool test in Config — `407` means the nodes need proxy credentials the API does not provide |
 | API key returns 401 | The client falls back to the guest pool and logs it; generate a fresh key in the console when you need quota |
 | No verification code in time | The account counts as FAIL and the batch continues; lengthen `otp_timeout_sec` or retry the account later |
 | DataDome hard block or 403 | The runner rotates IP and retries (`proxy_retry_attempts`); when blocks persist, wait before the next batch |

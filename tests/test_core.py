@@ -437,3 +437,20 @@ def test_reauth_stage_suspended_fails_fast(monkeypatch):
     else:
         raise AssertionError("expected SignupError")
     assert calls["login"] == 0, "suspended accounts must not attempt re-login"
+
+
+def test_proxy_required_refuses_direct(monkeypatch):
+    """proxy_required=True: empty pool fails instead of leaking the real IP."""
+    from github_register import runner
+    from github_register.config import Config
+
+    monkeypatch.setattr(runner, "_pick_proxy_url", lambda cfg, log=None: "")
+    cfg = Config(proxy_required=True)
+    try:
+        runner._browser_ctx_options(cfg, log=lambda m: None)
+    except runner.SignupError as exc:
+        assert "proxy_required" in str(exc)
+        # must match the IP-retry policy so the pool is re-fetched, not instant FAIL
+        assert runner._looks_ip_related(exc) is True
+    else:
+        raise AssertionError("expected SignupError, direct must be refused")

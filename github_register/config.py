@@ -17,6 +17,9 @@ class Config:
     nextproxy_country: str = ""  # e.g. "US","DE","SG" (empty = any)
     nextproxy_limit: int = 20
     nextproxy_max_latency: int = 0  # ms, 0 = off
+    # Direct connections are FORBIDDEN: without a working pool node the run
+    # fails instead of leaking the real exit IP (which gets flagged + burned).
+    proxy_required: bool = True
     register_count: int = 1
     headless: bool = False
     delay_sec: float = 5.0

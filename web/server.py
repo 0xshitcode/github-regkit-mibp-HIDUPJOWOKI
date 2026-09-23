@@ -319,6 +319,7 @@ class ConfigBody(BaseModel):
     proxy_hard_block_retries: Optional[int] = None
     proxy_rate_limit_retries: Optional[int] = None
     proxy_retry_attempts: Optional[int] = None
+    proxy_required: Optional[bool] = None
     create_repo: Optional[bool] = None
     repo_name: Optional[str] = None
     enable_2fa: Optional[bool] = None
@@ -483,7 +484,7 @@ class NextProxyBody(BaseModel):
 async def api_nextproxy_pool(
     body: NextProxyBody, x_access_key: Optional[str] = Header(None)
 ) -> Dict[str, Any]:
-    """Fetch live usable proxies from NextProxy (unmasked only)."""
+    """Fetch pool nodes and probe each from this host (TCP + HTTPS traffic)."""
     _require_auth(x_access_key)
     cfg = load_config(ROOT / "config.json")
     api_key = body.nextproxy_api_key or ""

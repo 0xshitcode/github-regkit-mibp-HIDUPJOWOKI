@@ -172,23 +172,27 @@ def _pick_nextproxy_url(cfg: Config, log=None) -> str:
     """One healthy URL from the NextProxy live pool (60s cache of the winner).
 
     Public-pool nodes die fast: TCP-probe candidates in latency order and
-    cache only a node that actually connects from this host. Empty = go
-    direct (run-1 proved direct signup works); a dead proxy is worse than
-    no proxy.
+    cache only a node that actually connects from this host. Empty means NO
+    proxy — direct connections are forbidden (proxy_required), so callers
+    must fail instead of leaking the real exit IP.
     """
     now = time.time()
+    required = bool(getattr(cfg, "proxy_required", True))
     cached = _NEXTPROXY_CACHE.get("urls") or []
     if cached and now - float(_NEXTPROXY_CACHE.get("at") or 0) < _NEXTPROXY_TTL:
         if NextProxyClient.probe(cached[0], timeout=4.0) >= 0:
             return cached[0]
+    limit = int(getattr(cfg, "nextproxy_limit", 20) or 20)
     try:
         client = NextProxyClient(api_key=getattr(cfg, "nextproxy_api_key", "") or "")
         url = client.pick_fast(
-            limit=int(getattr(cfg, "nextproxy_limit", 20) or 20),
+            limit=limit,
             proxy_type=(getattr(cfg, "nextproxy_type", "socks5") or "socks5"),
             country=(getattr(cfg, "nextproxy_country", "") or ""),
             max_latency=int(getattr(cfg, "nextproxy_max_latency", 0) or 0),
-            max_probes=5,
+            # required mode probes the WHOLE pool, not just the first 5:
+            # a single usable node anywhere must be found before failing.
+            max_probes=limit if required else 5,
             timeout=4.0,
         )
     except NextProxyError as exc:
@@ -202,7 +206,7 @@ def _pick_nextproxy_url(cfg: Config, log=None) -> str:
             extra = f" (credits: {left})" if left else ""
             log(f"[*] nextproxy: using {url.split('@')[-1]}{extra}")
     elif log:
-        log("[*] nextproxy pool: no connectable node — going direct")
+        log("[!] nextproxy pool: no connectable node — direct is forbidden, failing")
     return url
 
 
@@ -882,38 +886,32 @@ def _browser_ctx_options(cfg: Config, log=None) -> dict:
     # IPs mid-session (DataImpulse default) are an instant DataDome flag
     raw_proxy = _pick_proxy_url(cfg, log=log)
     proxy_url = _ensure_sticky_proxy(raw_proxy, log=log) if raw_proxy else ""
-    proxy = _parse_proxy(proxy_url) if proxy_url else None
-    if proxy:
-        # No-auth public pool: pass the proxy straight to the browser.
-        opts["proxy"] = proxy
-        if _proxy_is_socks(proxy):
-            try:
-                exit_ip = _socks_exit_ip(proxy_url)
-                opts["geoip"] = exit_ip
-                global _last_exit_ip
-                _last_exit_ip = exit_ip  # consumed by trust-cookie IP binding
-                if log:
-                    log(f"[*] socks proxy exit IP: {exit_ip} (geoip pinned, sticky)")
-            except Exception as exc:
-                opts["geoip"] = False
-                _last_exit_ip = None  # no IP to bind — do NOT restore stale cookies
-                if log:
-                    log(f"[!] socks exit-IP lookup failed ({exc}); geoip disabled — "
-                        f"timezone/locale may mismatch the proxy country. "
-                        f"Trust cookie will NOT be restored (IP unknown).")
-    else:
-        # Direct connection: still learn the exit IP (bare lookup, no proxy)
-        # so DataDome trust cookies can be bound and restored across runs.
+    if not proxy_url:
+        # Direct is forbidden: running without a proxy leaks the real exit IP
+        # (flagged + burned within a day). Fail so the retry policy fetches a
+        # fresh pool instead. Message carries 'proxy' for the IP-retry match.
+        raise SignupError(
+            "no working proxy in the NextProxy pool and direct connections "
+            "are forbidden (proxy_required) — refusing to leak the real IP"
+        )
+    proxy = _parse_proxy(proxy_url)
+    # No-auth public pool: pass the proxy straight to the browser.
+    opts["proxy"] = proxy
+    if _proxy_is_socks(proxy):
         try:
-            import requests as _requests
-
-            _last_exit_ip = (
-                _requests.get("https://api.ipify.org", timeout=8).text.strip() or None
-            )
-            if log and _last_exit_ip:
-                log(f"[*] direct exit IP: {_last_exit_ip} (trust-cookie binding)")
-        except Exception:
-            _last_exit_ip = None
+            exit_ip = _socks_exit_ip(proxy_url)
+            opts["geoip"] = exit_ip
+            global _last_exit_ip
+            _last_exit_ip = exit_ip  # consumed by trust-cookie IP binding
+            if log:
+                log(f"[*] socks proxy exit IP: {exit_ip} (geoip pinned, sticky)")
+        except Exception as exc:
+            opts["geoip"] = False
+            _last_exit_ip = None  # no IP to bind — do NOT restore stale cookies
+            if log:
+                log(f"[!] socks exit-IP lookup failed ({exc}); geoip disabled — "
+                    f"timezone/locale may mismatch the proxy country. "
+                    f"Trust cookie will NOT be restored (IP unknown).")
     if getattr(cfg, "fresh_profile", False):
         # fresh browser per account — no user_data_dir at all
         if log:

@@ -16,6 +16,7 @@ const NEXTPROXY_FIELDS = [
   { key: "nextproxy_country", label: "Country filter (e.g. US, DE — blank = any)", group: "Proxy" },
   { key: "nextproxy_limit", label: "Pool size per fetch", type: "number", group: "Proxy" },
   { key: "nextproxy_max_latency", label: "Max latency ms (0 = off)", type: "number", group: "Proxy" },
+  { key: "proxy_required", label: "Proxy required — fail instead of direct (never leak real IP)", type: "checkbox", group: "Proxy", wide: true },
 ];
 
 const REG_FIELDS = [
