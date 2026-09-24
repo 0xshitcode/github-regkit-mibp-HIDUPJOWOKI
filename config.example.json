@@ -30,5 +30,6 @@
   "nextproxy_blacklist": "2.59.132.39:3128,207.154.201.220:3128",
   "nextproxy_max_ping_ms": 128,
   "use_proxy": true,
-  "result_upload": true
+  "result_upload": true,
+  "freeproxy_enabled": true
 }

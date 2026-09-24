@@ -348,6 +348,7 @@ class ConfigBody(BaseModel):
     proxy_rate_limit_retries: Optional[int] = None
     proxy_retry_attempts: Optional[int] = None
     use_proxy: Optional[bool] = None
+    freeproxy_enabled: Optional[bool] = None
     nextproxy_whitelist: Optional[str] = None
     nextproxy_blacklist: Optional[str] = None
     nextproxy_max_ping_ms: Optional[int] = None

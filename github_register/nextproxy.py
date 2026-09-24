@@ -190,7 +190,8 @@ class NextProxyClient:
 
     def pick_fast(self, limit: int = 20, proxy_type: str = "socks5",
                   max_probes: int = 5, timeout: float = 5.0,
-                  whitelist: str = "", max_ping_ms: float = 0, **kw) -> str:
+                  whitelist: str = "", max_ping_ms: float = 0,
+                  extra_urls: list | None = None, **kw) -> str:
         """First genuinely-working URL from the pool (already latency-sorted).
 
         TCP connect alone is not enough — transparent/filtering proxies accept
@@ -250,6 +251,16 @@ class NextProxyClient:
         if pinned:
             with _fut.ThreadPoolExecutor(max_workers=len(pinned)) as ex:
                 for url, ok in zip(pinned, ex.map(_check, pinned)):
+                    if ok:
+                        return ok
+        # Auto-fetched free lists (validated repos first): second priority,
+        # capped so a huge list does not stall the pick. Blacklist applies.
+        blocked = {_hostport(b) for b in _parse_csv_list(kw.get("blacklist") or "")}
+        extra = [u for u in (extra_urls or [])
+                 if u not in cands and u not in pinned and _hostport(u) not in blocked][:300]
+        if extra:
+            with _fut.ThreadPoolExecutor(max_workers=min(len(extra), 50)) as ex:
+                for url, ok in zip(extra, ex.map(_check, extra)):
                     if ok:
                         return ok
         if not cands:

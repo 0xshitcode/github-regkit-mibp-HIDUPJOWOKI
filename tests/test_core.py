@@ -601,3 +601,55 @@ def test_deliver_results_falls_back_to_txt(monkeypatch, tmp_path):
                                   ["a@b----pw----u----"], log=lambda m: None)
     assert str(out).endswith(".txt")
     assert (tmp_path / "github_accounts_x.txt").read_text().strip() == "a@b----pw----u----"
+
+
+def test_freeproxy_fetch_parses_lines(monkeypatch):
+    from github_register import freeproxy as fp
+
+    class _Resp:
+        ok = True
+        text = "1.2.3.4:8080\nbad-line\n5.6.7.8:1080\n1.2.3.4:8080\n"
+
+    import requests as _rq
+    monkeypatch.setattr(_rq.Session, "get", lambda self, *a, **k: _Resp())
+    # fetch_all uses requests.get module-level; patch that too
+    monkeypatch.setattr(_rq, "get", lambda *a, **k: _Resp())
+    out = fp.fetch_all()
+    assert out["monosans-http"] == ["http://1.2.3.4:8080", "http://5.6.7.8:1080"]
+    all_urls = fp.fetch_urls()
+    assert len(all_urls) == len(set(all_urls)), "fetch_urls must dedupe"
+    assert "http://1.2.3.4:8080" in all_urls and "socks5h://1.2.3.4:8080" in all_urls
+
+
+def test_pick_fast_uses_extra_urls(monkeypatch):
+    """Free-list candidates are probed when whitelist misses."""
+    from github_register import nextproxy as nx
+
+    c = nx.NextProxyClient()
+    monkeypatch.setattr(nx.NextProxyClient, "probe", lambda self, url, timeout=5.0: 0.050)
+    monkeypatch.setattr(nx, "direct_exit_ip", lambda timeout=8.0: "9.9.9.9")
+
+    class _Resp:
+        ok = True
+        text = "1.2.3.4"
+        status_code = 200
+
+    import requests as _rq
+    monkeypatch.setattr(_rq, "get", lambda *a, **k: _Resp())
+    monkeypatch.setattr(nx.NextProxyClient, "fetch_urls", lambda self, **k: [])
+    got = c.pick_fast(limit=5, max_probes=5, extra_urls=["http://7.7.7.7:8080"])
+    assert got == "http://7.7.7.7:8080"
+
+
+def test_pick_fast_extra_respects_blacklist(monkeypatch):
+    from github_register import nextproxy as nx
+
+    c = nx.NextProxyClient()
+    calls = {"n": 0}
+    monkeypatch.setattr(nx.NextProxyClient, "probe",
+                        lambda self, url, timeout=5.0: (calls.__setitem__("n", 1), -1.0)[1])
+    monkeypatch.setattr(nx.NextProxyClient, "fetch_urls", lambda self, **k: [])
+    got = c.pick_fast(limit=5, max_probes=5, blacklist="7.7.7.7:8080",
+                      extra_urls=["http://7.7.7.7:8080"])
+    assert got == ""
+    assert calls["n"] == 0, "blacklisted extra must not even be probed"

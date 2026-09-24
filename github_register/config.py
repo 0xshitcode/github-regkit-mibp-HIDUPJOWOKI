@@ -27,6 +27,9 @@ class Config:
     nextproxy_max_ping_ms: int = 3000
     # Master proxy switch (Config checkbox). False = direct, no proxy at all.
     use_proxy: bool = True
+    # Auto-fetch free proxy lists (validated GitHub repos) as extra
+    # candidates between whitelist and the NextProxy pool sweep.
+    freeproxy_enabled: bool = True
     # Result delivery: upload instead of local .txt (Config checkbox).
     # Permanent free host (catbox.moe, no expiry). Upload failure falls
     # back to the local file so accounts are never lost.

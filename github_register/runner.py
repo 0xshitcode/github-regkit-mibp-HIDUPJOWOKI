@@ -185,6 +185,17 @@ def _pick_nextproxy_url(cfg: Config, log=None) -> str:
         if NextProxyClient.probe(cached[0], timeout=4.0) >= 0:
             return cached[0]
     limit = int(getattr(cfg, "nextproxy_limit", 20) or 20)
+    extra: list = []
+    if bool(getattr(cfg, "freeproxy_enabled", True)):
+        try:
+            from .freeproxy import get_candidates
+
+            extra = get_candidates()
+            if extra and log:
+                log(f"[*] freeproxy: {len(extra)} list candidates")
+        except Exception as exc:
+            if log:
+                log(f"[i] freeproxy fetch skipped: {exc}")
     try:
         client = NextProxyClient(api_key=getattr(cfg, "nextproxy_api_key", "") or "")
         url = client.pick_fast(
@@ -195,6 +206,7 @@ def _pick_nextproxy_url(cfg: Config, log=None) -> str:
             whitelist=(getattr(cfg, "nextproxy_whitelist", "") or ""),
             blacklist=(getattr(cfg, "nextproxy_blacklist", "") or ""),
             max_ping_ms=float(getattr(cfg, "nextproxy_max_ping_ms", 128) or 0),
+            extra_urls=extra,
             # required mode probes the WHOLE pool, not just the first 5:
             # a single usable node anywhere must be found before failing.
             max_probes=limit if required else 5,

@@ -84,6 +84,7 @@ Edit `config.json` (never commit this file):
 | `nextproxy_limit` | Pool size per fetch (max 100 for guests) |
 | `nextproxy_max_latency` | Drop nodes slower than this in ms; `0` means no filter |
 | `use_proxy` | `false` means direct without proxy; `true` (default) fails instead of leaking the real IP |
+| `freeproxy_enabled` | Auto-fetch free proxy lists (validated GitHub repos, 10-min cache) as candidates between whitelist and pool sweep |
 | `result_upload` | Upload results to a permanent link instead of writing local `.txt` |
 | `register_count` | Accounts per job |
 | `headless` | Hide the browser window; visible mode passes bot checks more often |
