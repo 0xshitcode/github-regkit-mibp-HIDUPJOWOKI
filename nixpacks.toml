@@ -1,0 +1,27 @@
+# Nixpacks (Railway) build: python + node, Firefox system libs, deps, UI, browser.
+[phases.setup]
+nixPkgs = ["python313", "nodejs_20"]
+aptPkgs = [
+  "libgtk-3-0",
+  "libdbus-glib-1-2",
+  "libxt6",
+  "libasound2",
+  "libnss3",
+  "libxss1",
+  "xvfb",
+]
+
+[phases.install]
+cmds = [
+  "pip install -r requirements.txt",
+  "npm --prefix frontend ci",
+]
+
+[phases.build]
+cmds = [
+  "npm --prefix frontend run build",
+  "python -m camoufox fetch",
+]
+
+[start]
+cmd = "./railway_start.sh"

@@ -439,22 +439,39 @@ def test_reauth_stage_suspended_fails_fast(monkeypatch):
     assert calls["login"] == 0, "suspended accounts must not attempt re-login"
 
 
-def test_proxy_required_refuses_direct(monkeypatch):
-    """proxy_required=True: empty pool fails instead of leaking the real IP."""
+def test_use_proxy_on_refuses_direct(monkeypatch):
+    """use_proxy=True: empty pool fails instead of leaking the real IP."""
     from github_register import runner
     from github_register.config import Config
 
     monkeypatch.setattr(runner, "_pick_proxy_url", lambda cfg, log=None: "")
-    cfg = Config(proxy_required=True)
+    cfg = Config(use_proxy=True)
     try:
         runner._browser_ctx_options(cfg, log=lambda m: None)
     except runner.SignupError as exc:
-        assert "proxy_required" in str(exc)
+        assert "use_proxy" in str(exc)
         # must match the IP-retry policy so the pool is re-fetched, not instant FAIL
         assert runner._looks_ip_related(exc) is True
     else:
         raise AssertionError("expected SignupError, direct must be refused")
 
+
+def test_use_proxy_off_allows_direct(monkeypatch):
+    """use_proxy=False: empty pool goes direct (no proxy options)."""
+    from github_register import runner
+    from github_register.config import Config
+
+    monkeypatch.setattr(runner, "_pick_proxy_url", lambda cfg, log=None: "")
+    monkeypatch.setattr(runner, "_proxy_exit_ip", lambda *a, **k: (_ for _ in ()).throw(Exception("x")))
+    import requests as _rq
+
+    class _Resp:
+        text = "9.9.9.9"
+
+    monkeypatch.setattr(_rq, "get", lambda *a, **k: _Resp())
+    cfg = Config(use_proxy=False)
+    opts = runner._browser_ctx_options(cfg, log=lambda m: None)
+    assert "proxy" not in opts
 
 def test_generic_launch_failure_with_proxy_marker_retries(monkeypatch):
     """Non-SignupError launch failures (Camoufox geoip) rotate when IP-marked."""
@@ -550,3 +567,37 @@ def test_pick_fast_rejects_slow_relay(monkeypatch):
         assert c.pick_fast(limit=5, max_probes=5, max_ping_ms=128) == ""
     finally:
         monkeypatch.undo()
+
+
+def test_deliver_results_uploads_no_txt(monkeypatch, tmp_path):
+    """result_upload on: permanent URL returned, no local txt written."""
+    from github_register import runner
+    from github_register.config import Config
+
+    monkeypatch.setattr(runner, "ACCOUNTS_DIR", tmp_path)
+    monkeypatch.setattr("github_register.upload.upload_text",
+                        lambda fn, content: "https://files.catbox.moe/abc123.txt")
+    out = runner._deliver_results(Config(result_upload=True), tmp_path / "github_accounts_x.txt",
+                                  ["a@b----pw----u----"], log=lambda m: None)
+    assert out == "https://files.catbox.moe/abc123.txt"
+    assert list(tmp_path.glob("*.txt")) == []
+    links = __import__("json").loads((tmp_path / "result_links.json").read_text())
+    assert links[0]["url"] == "https://files.catbox.moe/abc123.txt"
+
+
+def test_deliver_results_falls_back_to_txt(monkeypatch, tmp_path):
+    """Upload failure: local txt written so accounts are never lost."""
+    from github_register import runner
+    from github_register.upload import UploadError
+    from github_register.config import Config
+
+    monkeypatch.setattr(runner, "ACCOUNTS_DIR", tmp_path)
+
+    def _boom(fn, content):
+        raise UploadError("down")
+
+    monkeypatch.setattr("github_register.upload.upload_text", _boom)
+    out = runner._deliver_results(Config(result_upload=True), tmp_path / "github_accounts_x.txt",
+                                  ["a@b----pw----u----"], log=lambda m: None)
+    assert str(out).endswith(".txt")
+    assert (tmp_path / "github_accounts_x.txt").read_text().strip() == "a@b----pw----u----"

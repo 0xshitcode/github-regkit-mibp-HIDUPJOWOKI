@@ -21,12 +21,16 @@ class Config:
     # pool; blacklist (host:port) is skipped without probing. CSV.
     nextproxy_whitelist: str = ""  # e.g. "http://1.2.3.4:8888,http://5.6.7.8:10111"
     nextproxy_blacklist: str = ""  # e.g. "2.59.132.39:3128,207.154.201.220:3128"
-    # Max TCP-handshake ping (ms) a candidate must pass; slower nodes are
-    # rejected before any traffic check. 0 = off.
-    nextproxy_max_ping_ms: int = 128
-    # Direct connections are FORBIDDEN: without a working pool node the run
-    # fails instead of leaking the real exit IP (which gets flagged + burned).
-    proxy_required: bool = True
+    # Max ping (ms) a candidate must pass — TCP handshake AND relayed traffic
+    # alike. Relaxed default: free public relays rarely go below seconds.
+    # 0 = off.
+    nextproxy_max_ping_ms: int = 3000
+    # Master proxy switch (Config checkbox). False = direct, no proxy at all.
+    use_proxy: bool = True
+    # Result delivery: upload instead of local .txt (Config checkbox).
+    # Permanent free host (catbox.moe, no expiry). Upload failure falls
+    # back to the local file so accounts are never lost.
+    result_upload: bool = True
     register_count: int = 1
     headless: bool = False
     delay_sec: float = 5.0

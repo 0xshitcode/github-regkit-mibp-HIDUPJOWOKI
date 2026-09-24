@@ -54,6 +54,30 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
+
+def _ensure_local_files() -> None:
+    """Create missing runtime files so a fresh clone/Railway deploy boots.
+
+    config.json is gitignored — copy the example on first boot. Never
+    overwrite an existing config.
+    """
+    cfg_file = ROOT / "config.json"
+    example = ROOT / "config.example.json"
+    if not cfg_file.is_file() and example.is_file():
+        try:
+            cfg_file.write_bytes(example.read_bytes())
+            logging.getLogger("uvicorn.error").warning(
+                "config.json created from example — edit it before production use")
+        except OSError:
+            pass
+    try:
+        (ROOT / "accounts").mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
+
+_ensure_local_files()
+
 # Auth like n8n/WAHA: username+password from .env for self-hosting/production.
 # New: GITHUB_REGISTER_USERNAME + GITHUB_REGISTER_PASSWORD.
 # Legacy (compatible): GITHUB_REGISTER_ACCESS_PASSWORD (password-only, no username).
@@ -65,8 +89,12 @@ AUTH_ENABLED = bool(ACCESS_PASSWORD)
 # proxy (spoofable when directly exposed). Compose sets =1.
 TRUST_PROXY = (os.getenv("GITHUB_REGISTER_TRUST_PROXY") or "").strip().lower() in (
     "1", "true", "yes")
-HOST = (os.getenv("GITHUB_REGISTER_HOST") or "127.0.0.1").strip()
-PORT = int(os.getenv("GITHUB_REGISTER_PORT") or "8093")  # 8092 is used by grok-regkit (Chromium)
+HOST = (os.getenv("GITHUB_REGISTER_HOST") or "").strip()
+PORT = int(os.getenv("GITHUB_REGISTER_PORT") or os.getenv("PORT") or "8093")  # 8092 is used by grok-regkit (Chromium)
+if not HOST:
+    # Railway/Heroku-style platforms inject $PORT and require 0.0.0.0;
+    # local runs keep the loopback default.
+    HOST = "0.0.0.0" if os.getenv("PORT") else "127.0.0.1"
 
 if AUTH_ENABLED and HOST in ("0.0.0.0", "::"):
     logging.getLogger("uvicorn.error").warning(
@@ -319,10 +347,11 @@ class ConfigBody(BaseModel):
     proxy_hard_block_retries: Optional[int] = None
     proxy_rate_limit_retries: Optional[int] = None
     proxy_retry_attempts: Optional[int] = None
-    proxy_required: Optional[bool] = None
+    use_proxy: Optional[bool] = None
     nextproxy_whitelist: Optional[str] = None
     nextproxy_blacklist: Optional[str] = None
     nextproxy_max_ping_ms: Optional[int] = None
+    result_upload: Optional[bool] = None
     create_repo: Optional[bool] = None
     repo_name: Optional[str] = None
     enable_2fa: Optional[bool] = None

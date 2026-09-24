@@ -16,10 +16,11 @@ const NEXTPROXY_FIELDS = [
   { key: "nextproxy_country", label: "Country filter (e.g. US, DE — blank = any)", group: "Proxy" },
   { key: "nextproxy_limit", label: "Pool size per fetch", type: "number", group: "Proxy" },
   { key: "nextproxy_max_latency", label: "Max latency ms (0 = off)", type: "number", group: "Proxy" },
-  { key: "proxy_required", label: "Proxy required — fail instead of direct (never leak real IP)", type: "checkbox", group: "Proxy", wide: true },
+  { key: "use_proxy", label: "Use proxy — uncheck for direct without proxy", type: "checkbox", group: "Proxy", wide: true },
   { key: "nextproxy_whitelist", label: "Whitelist (csv URLs, tried first — e.g. http://1.2.3.4:8888)", group: "Proxy", wide: true },
   { key: "nextproxy_blacklist", label: "Blacklist (csv ip:port, skipped — e.g. 2.59.132.39:3128)", group: "Proxy", wide: true },
   { key: "nextproxy_max_ping_ms", label: "Max ping ms per candidate (0 = off)", type: "number", group: "Proxy" },
+  { key: "result_upload", label: "Upload results (permanent link, no local txt)", type: "checkbox", group: "Registration", wide: true },
 ];
 
 const REG_FIELDS = [

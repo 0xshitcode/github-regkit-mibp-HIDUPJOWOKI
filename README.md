@@ -21,7 +21,7 @@ cd github-regkit
 
 ## How it works
 
-1. The runner picks a healthy proxy from the NextProxy live pool (TCP plus HTTPS checked, whole pool probed); without a working node the run FAILS — direct connections are forbidden so the real IP never leaks
+1. The runner picks a healthy proxy (free-proxy pool + NextProxy; TCP plus HTTPS traffic checked, relay timed). With **Use proxy** on and no working node, the run FAILS instead of leaking the real IP; with it off, the run goes direct
 2. Camoufox (anti-detect Firefox) opens the signup page and waits out DataDome
 3. Only then it creates a PakMail inbox on server-2, so no mailbox time burns during bot checks
 4. It fills email, password, and username, submits, and reads the 8-digit launch code from the inbox (list plus detail endpoint)
@@ -33,7 +33,10 @@ Post-signup failures never discard a verified account. The reason lands in the l
 ## Features
 
 - **Automatic IP rotation**: DataDome blocks, rate limits, and proxy failures trigger a fresh IP plus a retry of the same account (`proxy_retry_attempts`, default 2)
-- **Proxy mandatory**: dead or filtering proxies are skipped before the browser starts; an empty pool fails the account (retry re-fetches the pool) instead of going direct
+- **Use proxy checkbox**: on means proxy-only (empty pool fails and retries re-fetch); off means direct without proxy
+- **Whitelist / blacklist**: pin known-good URLs (tried first, no sweep) or skip known-bad `ip:port`
+- **Ping gates**: TCP handshake and relayed traffic must both fit `nextproxy_max_ping_ms` (default 3000)
+- **Result upload**: account lines upload to a permanent free host (catbox.moe, no expiry) instead of local `.txt`; the link prints in logs, CLI, and job status, with `accounts/result_links.json` as index. Upload failure falls back to local `.txt`
 - **Inbox access links**: every account saves a shareable PakMail link in `accounts/email_links.json`; copy or open it from **Accounts**
 - **Re-poll inbox code**: re-read the same inbox for a new code (2 minute cap, manual stop), no reorder bookkeeping
 - **Account management**: groups, merge files, export TXT/CSV/JSON, TOTP codes, recovery codes
@@ -59,9 +62,10 @@ Edit `config.json` (never commit this file):
   "nextproxy_api_key": "",
   "nextproxy_type": "https",
   "nextproxy_country": "",
-  "nextproxy_limit": 20,
+  "nextproxy_limit": 100,
+  "use_proxy": true,
+  "result_upload": true,
   "nextproxy_max_latency": 0,
-  "proxy_required": true,
   "register_count": 1,
   "headless": false,
   "otp_timeout_sec": 240,
@@ -79,7 +83,8 @@ Edit `config.json` (never commit this file):
 | `nextproxy_country` | Two-letter filter such as `DE`; blank means any country |
 | `nextproxy_limit` | Pool size per fetch (max 100 for guests) |
 | `nextproxy_max_latency` | Drop nodes slower than this in ms; `0` means no filter |
-| `proxy_required` | `true` means fail without a working proxy; never go direct |
+| `use_proxy` | `false` means direct without proxy; `true` (default) fails instead of leaking the real IP |
+| `result_upload` | Upload results to a permanent link instead of writing local `.txt` |
 | `register_count` | Accounts per job |
 | `headless` | Hide the browser window; visible mode passes bot checks more often |
 | `otp_timeout_sec` | Seconds to wait for the verification mail per account |
@@ -110,7 +115,7 @@ Protect the console before exposing it. Copy `.env.example` to `.env` (done by `
 GITHUB_REGISTER_HOST=127.0.0.1
 GITHUB_REGISTER_PORT=8093
 GITHUB_REGISTER_USERNAME=admin
-GITHUB_REGISTER_PASSWORD=use-a-strong-password
+GITHUB_REGISTER_PASSWORD=admin
 ```
 
 The server binds `127.0.0.1` by default. Bind `0.0.0.0` only behind a trusted HTTPS reverse proxy, and only on a network you trust: `config.json` holds real credentials.
@@ -163,7 +168,7 @@ Bind-mounted files (do not delete): `config.json`, `accounts/`, `.browser-profil
 
 | Problem | Action |
 | --- | --- |
-| Pool has no connectable node | The account fails (`proxy_required`) and the retry re-fetches the pool; check the pool test in Config — `407` means the nodes need proxy credentials the API does not provide |
+| Pool has no connectable node | With Use proxy on, the account fails and the retry re-fetches; check the pool test in Config — `407` means the nodes need proxy credentials the API does not provide |
 | API key returns 401 | The client falls back to the guest pool and logs it; generate a fresh key in the console when you need quota |
 | No verification code in time | The account counts as FAIL and the batch continues; lengthen `otp_timeout_sec` or retry the account later |
 | DataDome hard block or 403 | The runner rotates IP and retries (`proxy_retry_attempts`); when blocks persist, wait before the next batch |
@@ -171,6 +176,18 @@ Bind-mounted files (do not delete): `config.json`, `accounts/`, `.browser-profil
 | `config.json` became a directory | Docker created a folder because the file was missing before `up`; remove it, copy the example, and run `up` again |
 | Console shows 403 after redeploy | Sessions die on restart while the browser keeps the old token; reload the page and log in again |
 | UI ignores frontend changes | Run `./run.sh --rebuild`, then restart the server |
+
+
+## Deploy to Railway
+
+Push this repo to GitHub, then **New Project → Deploy from Repo** in Railway — no other setup:
+
+- Build: `nixpacks.toml` installs Python + Node, system libs for Firefox, `requirements.txt`, frontend (`npm ci` + `npm run build`), and the Camoufox browser (`python -m camoufox fetch`)
+- Start: `railway_start.sh` creates `config.json` from the example on first boot, fetches the browser if missing, and runs the web server
+- Port: the server binds `0.0.0.0:$PORT` automatically when Railway injects `PORT`; locally it keeps `127.0.0.1:8093`
+- Login: set `GITHUB_REGISTER_USERNAME` and `GITHUB_REGISTER_PASSWORD` in Railway **Variables** (defaults `admin` / `admin` come from `.env`, which Railway does not use — set real values)
+- Persistence: Railway disks are ephemeral — `accounts/`, `config.json`, and the browser re-download on each redeploy. Attach a **Volume** mounted at `/app/accounts` to keep results, and keep **Result upload** on so every run also lands on a permanent link
+- First boot downloads ~1 GB (browser); give it a few minutes, then open the Railway domain and log in
 
 ## Security
 

@@ -173,11 +173,13 @@ def _pick_nextproxy_url(cfg: Config, log=None) -> str:
 
     Public-pool nodes die fast: TCP-probe candidates in latency order and
     cache only a node that actually connects from this host. Empty means NO
-    proxy — direct connections are forbidden (proxy_required), so callers
-    must fail instead of leaking the real exit IP.
+    proxy — with use_proxy on, callers must fail instead of leaking the
+    real exit IP. With use_proxy off, '' means direct (no pool sweep at all).
     """
     now = time.time()
-    required = bool(getattr(cfg, "proxy_required", True))
+    required = bool(getattr(cfg, "use_proxy", True))
+    if not required:
+        return ""
     cached = _NEXTPROXY_CACHE.get("urls") or []
     if cached and now - float(_NEXTPROXY_CACHE.get("at") or 0) < _NEXTPROXY_TTL:
         if NextProxyClient.probe(cached[0], timeout=4.0) >= 0:
@@ -209,7 +211,8 @@ def _pick_nextproxy_url(cfg: Config, log=None) -> str:
             extra = f" (credits: {left})" if left else ""
             log(f"[*] nextproxy: using {url.split('@')[-1]}{extra}")
     elif log:
-        log("[!] nextproxy pool: no connectable node — direct is forbidden, failing")
+        log("[!] nextproxy pool: no connectable node"
+            + (" — proxy required, failing" if required else " — direct mode (use_proxy off)"))
     return url
 
 
@@ -885,6 +888,7 @@ def _browser_ctx_options(cfg: Config, log=None) -> dict:
     """
     import platform
 
+    global _last_exit_ip
     opts = {"headless": cfg.headless, "humanize": True, "geoip": True}
     host_os = platform.system()
     if host_os == "Darwin":
@@ -897,33 +901,49 @@ def _browser_ctx_options(cfg: Config, log=None) -> dict:
     # IPs mid-session (DataImpulse default) are an instant DataDome flag
     raw_proxy = _pick_proxy_url(cfg, log=log)
     proxy_url = _ensure_sticky_proxy(raw_proxy, log=log) if raw_proxy else ""
+    use_proxy = bool(getattr(cfg, "use_proxy", True))
+    if not proxy_url and use_proxy:
+        # Proxy mode with an empty pool: fail so the retry policy fetches a
+        # fresh pool instead of leaking the real exit IP. Message carries
+        # 'proxy' for the IP-retry match.
+        raise SignupError(
+            "no working proxy in the pool and use_proxy is on "
+            "— refusing to leak the real IP"
+        )
     if not proxy_url:
-        # Direct is forbidden: running without a proxy leaks the real exit IP
-        # (flagged + burned within a day). Fail so the retry policy fetches a
-        # fresh pool instead. Message carries 'proxy' for the IP-retry match.
-        raise SignupError(
-            "no working proxy in the NextProxy pool and direct connections "
-            "are forbidden (proxy_required) — refusing to leak the real IP"
-        )
-    proxy = _parse_proxy(proxy_url)
-    # No-auth public pool: pass the proxy straight to the browser.
-    opts["proxy"] = proxy
-    # Resolve the exit IP ourselves through the proxy and pin it via geoip:
-    # pool nodes die within seconds, and Camoufox's own probe (ipecho.net)
-    # may fail where our check just passed. A dead node raises here — with
-    # 'proxy' in the message so the IP-retry policy picks a fresh node.
-    try:
-        exit_ip = _proxy_exit_ip(proxy_url)
-        opts["geoip"] = exit_ip
-        global _last_exit_ip
-        _last_exit_ip = exit_ip  # consumed by trust-cookie IP binding
+        # Direct mode (use_proxy off): no proxy options at all. Still learn
+        # the exit IP so DataDome trust cookies can be bound and restored.
+        try:
+            import requests as _requests
+
+            _last_exit_ip = (
+                _requests.get("https://api.ipify.org", timeout=8).text.strip() or None
+            )
+            if log and _last_exit_ip:
+                log(f"[*] direct exit IP: {_last_exit_ip} (trust-cookie binding)")
+        except Exception:
+            _last_exit_ip = None
         if log:
-            log(f"[*] proxy exit IP: {exit_ip} (geoip pinned, sticky)")
-    except Exception as exc:
-        _last_exit_ip = None  # no IP to bind — do NOT restore stale cookies
-        raise SignupError(
-            f"proxy died between pick and launch ({exc}); rotating to a fresh node"
-        )
+            log("[*] direct mode: no proxy (use_proxy off)")
+    else:
+        proxy = _parse_proxy(proxy_url)
+        # No-auth public pool: pass the proxy straight to the browser.
+        opts["proxy"] = proxy
+        # Resolve the exit IP ourselves through the proxy and pin it via geoip:
+        # pool nodes die within seconds, and Camoufox's own probe (ipecho.net)
+        # may fail where our check just passed. A dead node raises here — with
+        # 'proxy' in the message so the IP-retry policy picks a fresh node.
+        try:
+            exit_ip = _proxy_exit_ip(proxy_url)
+            opts["geoip"] = exit_ip
+            _last_exit_ip = exit_ip  # consumed by trust-cookie IP binding
+            if log:
+                log(f"[*] proxy exit IP: {exit_ip} (geoip pinned, sticky)")
+        except Exception as exc:
+            _last_exit_ip = None  # no IP to bind — do NOT restore stale cookies
+            raise SignupError(
+                f"proxy died between pick and launch ({exc}); rotating to a fresh node"
+            )
     if getattr(cfg, "fresh_profile", False):
         # fresh browser per account — no user_data_dir at all
         if log:
@@ -2148,13 +2168,58 @@ def register_one(
             _save_email_link(pending["email"], order_id, log)
 
 
+def _deliver_results(cfg: Config, out: Path, lines: list[str], log) -> Path | str:
+    """Persist account lines: upload (permanent URL, no local .txt) or file.
+
+    Returns the upload URL when result_upload succeeds, else the local path.
+    Upload failures fall back to the local file — accounts are never lost.
+    Every delivery is appended to accounts/result_links.json for the UI/logs.
+    """
+    from .upload import UploadError, upload_text
+
+    links_path = ACCOUNTS_DIR / "result_links.json"
+    try:
+        current = json.loads(links_path.read_text(encoding="utf-8"))
+        if not isinstance(current, list):
+            current = []
+    except Exception:
+        current = []
+
+    def _record(file: str, url: str, count: int) -> None:
+        current.append({"file": file, "url": url, "count": count,
+                        "at": datetime.now().isoformat(timespec="seconds")})
+        try:
+            links_path.write_text(json.dumps(current, indent=2), encoding="utf-8")
+        except Exception as exc:
+            log(f"[i] result-links write failed: {exc}")
+
+    if not lines:
+        return out
+    if bool(getattr(cfg, "result_upload", True)):
+        try:
+            url = upload_text(out.name, "\n".join(lines) + "\n")
+            _record(out.name, url, len(lines))
+            log(f"[+] results uploaded ({len(lines)} accounts, permanent): {url}")
+            return url
+        except UploadError as exc:
+            log(f"[!] upload failed ({exc}) — falling back to local file")
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _record(out.name, "", len(lines))
+    log(f"[+] {len(lines)} accounts saved to {out.name}")
+    return out
+
+
 def run_job(
     cfg: Config,
     cancel_cb: Optional[Callable[[], bool]] = None,
     log: Optional[Callable[[str], None]] = None,
     progress_cb: Optional[Callable[[int, int], None]] = None,
-) -> tuple[int, int, Path]:
-    """Register `register_count` accounts; returns (ok, fail, output_file).
+) -> tuple[int, int, Path | str]:
+    """Register `register_count` accounts; returns (ok, fail, output).
+
+    Output is the permanent upload URL when result_upload is on (no local
+    .txt is written), otherwise the local accounts .txt path. Upload
+    failures fall back to the local file so accounts are never lost.
 
     `progress_cb(ok, fail)` (optional) is invoked after each account attempt so
     external observers (e.g. the web UI) can render live stats instead of only
@@ -2176,6 +2241,7 @@ def run_job(
     ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
     out = ACCOUNTS_DIR / f"github_accounts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     ok = fail = 0
+    lines: list[str] = []
     provider = "pakmail"
     log(f"[*] github-regkit | engine=Camoufox (Firefox anti-detect) | mail=pakmail "
         f"| headless={cfg.headless} | target={cfg.register_count} | output={out.name}")
@@ -2200,10 +2266,9 @@ def run_job(
                 log(f"[!] mail provider error, aborting: {exc}")
                 break
             if line:
-                with out.open("a", encoding="utf-8") as f:
-                    f.write(line + "\n")
+                lines.append(line)
                 ok += 1
-                log(f"[+] {line.split('----')[0]} saved to {out.name}")
+                log(f"[+] {line.split('----')[0]} registered ({ok} so far)")
             else:
                 fail += 1
             log(f"[*] stats: OK {ok} | FAIL {fail}")
@@ -2217,4 +2282,4 @@ def run_job(
     finally:
         log(f"[*] done: OK {ok} | FAIL {fail}")
         _emit_progress(ok, fail)  # final snapshot
-    return ok, fail, out
+    return ok, fail, _deliver_results(cfg, out, lines, log)
